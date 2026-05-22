@@ -9,7 +9,7 @@ import type {
   ResponseConverterOptions,
   ResponseType,
   SourceType,
-} from "../types/response";
+} from "../types/response.js";
 
 const gunzip = promisify(zlib.gunzip);
 const inflate = promisify(zlib.inflate);
@@ -147,11 +147,11 @@ export class ResponseConverter {
     return "text";
   }
 
-  convert(
+  async convert(
     body: Buffer,
     targetType: ResponseType,
     meta: ConversionMeta = {},
-  ): ParsedResponse | Promise<ParsedResponse> {
+  ): Promise<ParsedResponse> {
     const charset = this.options.charset ?? "utf-8";
 
     if (!meta.contentEncoding || body.length === 0) {
@@ -159,11 +159,12 @@ export class ResponseConverter {
       return this.processConversion(body, text, targetType, meta);
     }
 
-    return this.decodeBodyAsync(body, meta.contentEncoding, charset).then(
-      (text) => {
-        return this.processConversion(body, text, targetType, meta);
-      },
+    const text = await this.decodeBodyAsync(
+      body,
+      meta.contentEncoding,
+      charset,
     );
+    return this.processConversion(body, text, targetType, meta);
   }
 
   private async decodeBodyAsync(

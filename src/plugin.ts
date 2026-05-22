@@ -59,10 +59,13 @@ export function withParser(
       throw readError;
     }
 
-    const parsedData = converter.convert(bufferBody, responseType, {
+    const currentUrl = (rawResponse.url || req.url) as string | undefined;
+
+    const parsedData = await converter.convert(bufferBody, responseType, {
       contentType: headers["content-type"] || headers["Content-Type"],
       contentEncoding:
         headers["content-encoding"] || headers["Content-Encoding"],
+      url: currentUrl,
     });
 
     if (isLogging) {
@@ -72,7 +75,8 @@ export function withParser(
       req.meta.timings.parsingMs = Number(end - start) / 1e6;
     }
 
-    return parsedData as T;
+    rawResponse.body = parsedData;
+    return rawResponse as T;
   };
 
   return client;
