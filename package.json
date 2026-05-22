@@ -1,6 +1,6 @@
 {
   "name": "@hyperttp/parser",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Automated response parsing and content conversion plugin for Hyperttp client",
   "type": "module",
   "main": "./dist/index.js",
@@ -31,14 +31,14 @@
     "vitest": "latest",
     "prettier": "latest",
     "eslint": "latest",
-    "@dirold2/dev-tools": "^1.0.11",
+    "@dirold2/dev-tools": "^1.0.12",
     "jiti": "^2.7.0"
   },
   "scripts": {
     "build": "tsc && d-build",
     "dist": "d-dist",
     "deploy": "npm run build && npm run dist",
-    "publish-npm": "d-publish",
+    "publish": "d-publish",
     "typecheck": "tsc --noEmit",
     "lint": "eslint 'src/**/*.{ts,js}'",
     "format": "prettier --write .",

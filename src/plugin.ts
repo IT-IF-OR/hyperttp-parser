@@ -21,7 +21,7 @@ export function withParser(
     if (typeof body.cancel === "function") {
       body.cancel().catch(() => {});
     } else if (typeof body.destroy === "function") {
-      body.destroy();
+      if (!body.destroyed) body.destroy();
     }
   };
 
@@ -42,9 +42,8 @@ export function withParser(
       return rawResponse as T;
     }
 
-    safeDestroy(rawResponse.body);
-
     if (rawResponse.status && rawResponse.status >= 400) {
+      safeDestroy(rawResponse.body);
       return rawResponse as T;
     }
 
@@ -52,7 +51,13 @@ export function withParser(
     const isLogging = req.meta?.trackTimings;
     const start = isLogging ? process.hrtime.bigint() : 0n;
 
-    const bufferBody = await converter.readBody(body);
+    let bufferBody;
+    try {
+      bufferBody = await converter.readBody(body);
+    } catch (readErr) {
+      safeDestroy(body);
+      throw readErr;
+    }
 
     const currentUrl = (rawResponse.url || req.url) as string | undefined;
 
