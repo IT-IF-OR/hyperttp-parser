@@ -1,6 +1,6 @@
 {
   "name": "@hyperttp/parser",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Automated response parsing and content conversion plugin for Hyperttp client",
   "type": "module",
   "main": "./dist/index.js",
@@ -32,6 +32,7 @@
     "vitest": "latest",
     "prettier": "latest",
     "eslint": "latest",
+    "@dirold2/dev-tools": "^1.0.4",
     "jiti": "^2.7.0"
   },
   "scripts": {

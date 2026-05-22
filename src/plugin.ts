@@ -14,6 +14,17 @@ export function withParser(
   const next = client.dispatch.bind(client);
   const converter = new ResponseConverter(options);
 
+  const safeDestroy = (body: any) => {
+    if (!body) return;
+    if (typeof body.on === "function") body.on("error", () => {});
+
+    if (typeof body.cancel === "function") {
+      body.cancel().catch(() => {});
+    } else if (typeof body.destroy === "function") {
+      body.destroy();
+    }
+  };
+
   client.dispatch = async <T = any>(req: InternalRequest): Promise<T> => {
     const responseType = req.meta?.responseType || "auto";
 
@@ -27,22 +38,13 @@ export function withParser(
 
     const rawResponse = await next<any>(req);
 
-    if (
-      !rawResponse ||
-      rawResponse.body === undefined ||
-      rawResponse.body === null
-    ) {
+    if (!rawResponse?.body) {
       return rawResponse as T;
     }
 
+    safeDestroy(rawResponse.body);
+
     if (rawResponse.status && rawResponse.status >= 400) {
-      if (typeof rawResponse.body.cancel === "function") {
-        await rawResponse.body.cancel().catch(() => {});
-      } else if (typeof rawResponse.body.destroy === "function") {
-        rawResponse.body.destroy();
-      } else {
-        await converter.readBody(rawResponse.body).catch(() => {});
-      }
       return rawResponse as T;
     }
 
@@ -50,14 +52,7 @@ export function withParser(
     const isLogging = req.meta?.trackTimings;
     const start = isLogging ? process.hrtime.bigint() : 0n;
 
-    let bufferBody: any;
-    try {
-      bufferBody = await converter.readBody(body);
-    } catch (readError) {
-      if (typeof body.cancel === "function")
-        await body.cancel().catch(() => {});
-      throw readError;
-    }
+    const bufferBody = await converter.readBody(body);
 
     const currentUrl = (rawResponse.url || req.url) as string | undefined;
 
