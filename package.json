@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@dirold2/dev-tools": "^1.0.0",
     "globals": "^17.6.0",
     "typescript-eslint": "^8.59.4",
     "@types/bun": "latest",
@@ -34,10 +35,10 @@
     "jiti": "^2.7.0"
   },
   "scripts": {
-    "build": "tsc && node scripts/build-package.js",
-    "dist": "node scripts/publish-dist.js",
+    "build": "tsc && d-build",
+    "dist": "d-dist",
     "deploy": "npm run build && npm run dist",
-    "publish-npm": "node scripts/publish-npm.js",
+    "publish-npm": "d-publish",
     "typecheck": "tsc --noEmit",
     "lint": "eslint 'src/**/*.{ts,js}'",
     "format": "prettier --write .",
