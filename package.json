@@ -34,9 +34,10 @@
     "jiti": "^2.7.0"
   },
   "scripts": {
-    "build": "tsc && node scripts/build-package.js && cp README.md LICENSE dist/",
+    "build": "tsc && node scripts/build-package.js",
     "dist": "node scripts/publish-dist.js",
     "deploy": "npm run build && npm run dist",
+    "publish-npm": "node scripts/publish-npm.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint 'src/**/*.{ts,js}'",
     "format": "prettier --write .",
