@@ -5,7 +5,6 @@ import path from "node:path";
 try {
   console.log("🚀 Deploying build to __dist__...");
 
-  // 1. Сборка проекта
   console.log("📦 Building...");
   execSync("npm run build", { stdio: "inherit" });
 
@@ -15,13 +14,10 @@ try {
     throw new Error("Folder 'dist' not found.");
   }
 
-  // 2. Текущая ветка
   const currentBranch = execSync("git branch --show-current").toString().trim();
 
-  // 3. Переключение
   execSync("git checkout -B __dist__");
 
-  // 4. Очистка корня
   console.log("🧹 Cleaning root directory...");
   const files = fs.readdirSync(".");
   for (const file of files) {
@@ -30,10 +26,8 @@ try {
     }
   }
 
-  // 5. Копирование
   execSync(`cp -r ${distPath}/* .`);
 
-  // 6. Git операции
   execSync("git add -f .");
 
   const status = execSync("git status --porcelain").toString();
@@ -45,8 +39,7 @@ try {
     console.log("ℹ️ No changes to deploy.");
   }
 
-  // 7. Возврат
-  execSync(`git checkout ${currentBranch}`);
+  execSync(`git checkout main`);
 } catch (e) {
   console.error("❌ Deploy failed:", e.message);
   process.exit(1);
