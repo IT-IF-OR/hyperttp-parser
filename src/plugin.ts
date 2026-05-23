@@ -22,16 +22,21 @@ declare module "@hyperttp/core" {
   }
 }
 
-export function withParser(): HyperPlugin {
-  let converter!: ResponseConverter;
+export function withParser(
+  pluginOptions?: Partial<ResponseConverterOptions>,
+): HyperPlugin {
+  let mergedGlobalOptions: ResponseConverterOptions;
 
   return {
     name: "hyperttp-parser",
     phase: "FORMAT",
     enabled: () => true,
 
-    setup(_core, config: HttpClientOptions) {
-      converter = new ResponseConverter(config.responseConverter);
+    setup(_core, clientConfig: HttpClientOptions) {
+      mergedGlobalOptions = {
+        ...clientConfig.responseConverter,
+        ...pluginOptions,
+      };
     },
 
     wrapDispatch: (next) => {
@@ -42,10 +47,18 @@ export function withParser(): HyperPlugin {
         if (!res?.body) return res;
         if (res.status >= 400) return res;
 
+        const parsableReq = req as ParsableRequest;
+
+        const currentOptions = {
+          ...mergedGlobalOptions,
+          ...parsableReq.meta?.responseConverter,
+        };
+
+        const converter = new ResponseConverter(currentOptions);
+
         const buffer = await converter.readBody(res.body);
 
-        const targetType =
-          (req as ParsableRequest).meta?.responseType ?? "auto";
+        const targetType = parsableReq.meta?.responseType ?? "auto";
 
         const contentType =
           res.headers["content-type"] || res.headers["Content-Type"];
