@@ -1,6 +1,6 @@
 {
   "name": "@hyperttp/parser",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "Automated response parsing and content conversion plugin for Hyperttp client",
   "type": "module",
   "main": "./dist/index.js",
@@ -19,7 +19,7 @@
   },
   "peerDependencies": {
     "typescript": "^5",
-    "@hyperttp/core": "^1.0.5"
+    "@hyperttp/core": "^1.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

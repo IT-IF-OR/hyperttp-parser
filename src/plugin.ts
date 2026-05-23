@@ -3,9 +3,14 @@ import type {
   HyperPlugin,
   InternalRequest,
   HttpClientOptions,
+  ResponseType,
 } from "@hyperttp/core";
 import type { ResponseConverterOptions } from "./types/response.js";
 import { ResponseConverter } from "./utils/ResponseConverter.js";
+
+interface ParsableRequest extends InternalRequest {
+  responseType?: ResponseType;
+}
 
 export function withParser(
   client: HyperCore,
@@ -26,7 +31,10 @@ export function withParser(
   };
 
   client.dispatch = async <T = any>(req: InternalRequest): Promise<T> => {
-    const responseType = req.meta?.responseType || "auto";
+    const typedReq = req as ParsableRequest;
+
+    const responseType =
+      typedReq.responseType || typedReq.meta?.responseType || "auto";
 
     if (
       req.method === "HEAD" ||
