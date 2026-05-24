@@ -17,7 +17,9 @@ const brotliDecompress = promisify(zlib.brotliDecompress);
 
 function normalizeContentType(ct?: string): string | undefined {
   if (!ct) return undefined;
-  return ct.split(";")[0].trim().toLowerCase();
+  const semiIdx = ct.indexOf(";");
+  const base = semiIdx === -1 ? ct : ct.slice(0, semiIdx);
+  return base.trim().toLowerCase();
 }
 
 export class ResponseConverter {
@@ -73,75 +75,49 @@ export class ResponseConverter {
     return Buffer.concat(chunks);
   }
 
-  async decodeBody(
-    body: Buffer,
-    encoding?: string,
-    charset: BufferEncoding = this.options.charset ?? "utf-8",
-  ): Promise<string> {
-    if (!encoding || body.length === 0) {
-      return body.toString(charset);
-    }
-
-    try {
-      switch (encoding.toLowerCase()) {
-        case "gzip":
-          return (await gunzip(body)).toString(charset);
-        case "deflate":
-          return (await inflate(body)).toString(charset);
-        case "br":
-          return (await brotliDecompress(body)).toString(charset);
-        default:
-          return body.toString(charset);
-      }
-    } catch {
-      return body.toString(charset);
-    }
-  }
-
   detectSourceType(
     contentType?: string,
     text?: string,
     url?: string,
   ): SourceType {
-    const ct = normalizeContentType(contentType)?.replace(/\s+/g, "");
-    const sample = (text || "").trimStart().slice(0, 512).toLowerCase();
-
-    const isHtml =
-      ct === "text/html" ||
-      sample.includes("<!doctype html") ||
-      sample.includes("<html") ||
-      sample.includes("<head") ||
-      sample.includes("<body");
-
-    const isJson =
-      ct === "application/json" ||
-      ct?.endsWith("+json") ||
-      sample.startsWith("{") ||
-      sample.startsWith("[");
-
-    const isXml =
-      ct === "application/xml" ||
-      ct === "text/xml" ||
-      (sample.startsWith("<") && !isHtml);
-
-    if (
-      ct?.startsWith("image/") ||
-      ct?.startsWith("audio/") ||
-      ct?.startsWith("video/") ||
-      ct === "application/octet-stream"
-    ) {
-      return "buffer";
+    if (contentType) {
+      const ct = normalizeContentType(contentType);
+      if (ct) {
+        if (ct === "application/json" || ct.endsWith("+json")) return "json";
+        if (ct === "text/html") return "html";
+        if (ct === "application/xml" || ct === "text/xml") return "xml";
+        if (
+          ct.startsWith("image/") ||
+          ct.startsWith("audio/") ||
+          ct.startsWith("video/") ||
+          ct === "application/octet-stream"
+        ) {
+          return "buffer";
+        }
+      }
     }
-
-    if (isJson) return "json";
-    if (isHtml) return "html";
-    if (isXml) return "xml";
 
     if (url) {
       const lower = url.toLowerCase();
-      if (lower.includes(".json")) return "json";
-      if (lower.includes(".xml")) return "xml";
-      if (lower.includes(".html") || lower.includes(".htm")) return "html";
+      if (lower.endsWith(".json")) return "json";
+      if (lower.endsWith(".xml")) return "xml";
+      if (lower.endsWith(".html") || lower.endsWith(".htm")) return "html";
+    }
+
+    if (!text) return "text";
+
+    const trimmedStart = text.trimStart();
+    if (trimmedStart.length === 0) return "text";
+
+    const firstChar = trimmedStart[0];
+    if (firstChar === "{" || firstChar === "[") return "json";
+
+    if (firstChar === "<") {
+      const sample = trimmedStart.slice(0, 15).toLowerCase();
+      if (sample.startsWith("<!doctype html") || sample.startsWith("<html")) {
+        return "html";
+      }
+      return "xml";
     }
 
     return "text";
@@ -188,7 +164,6 @@ export class ResponseConverter {
     }
   }
 
-  // 3. Вынесенная синхронная логика маппинга типов
   private processConversion(
     body: Buffer,
     text: string,
@@ -196,7 +171,6 @@ export class ResponseConverter {
     meta: ConversionMeta,
   ): ParsedResponse {
     const sourceType = this.detectSourceType(meta.contentType, text, meta.url);
-    const trimmed = text.trim();
 
     switch (targetType) {
       case "buffer":
@@ -204,14 +178,14 @@ export class ResponseConverter {
       case "text":
         return text;
       case "json":
-        return this.toJson(trimmed, sourceType, meta.url);
+        return this.toJson(text.trim(), sourceType, meta.url);
       case "xml":
-        return this.toXml(trimmed, sourceType);
+        return this.toXml(text.trim(), sourceType);
       case "html":
-        return this.toHtml(trimmed, sourceType); // Тут cheerio сработает честно
+        return this.toHtml(text.trim(), sourceType);
       case "auto":
       default:
-        return this.toAuto(trimmed, sourceType, meta.url, body);
+        return this.toAuto(text, sourceType, meta.url, body);
     }
   }
 
@@ -236,13 +210,15 @@ export class ResponseConverter {
         return text;
       case "text":
       default:
-        if (
-          url &&
-          (url.toLowerCase().endsWith(".json") ||
+        if (url) {
+          const lower = url.toLowerCase();
+          if (
+            lower.endsWith(".json") ||
             text.startsWith("{") ||
-            text.startsWith("["))
-        ) {
-          return this.safeJsonParse(text);
+            text.startsWith("[")
+          ) {
+            return this.safeJsonParse(text);
+          }
         }
         return text;
     }
@@ -258,18 +234,11 @@ export class ResponseConverter {
     if (sourceType === "json") {
       return this.safeJsonParse(text);
     }
-
     if (sourceType === "xml") {
       return this.xmlParser.parse(text);
     }
-
     if (sourceType === "html") {
       return this.htmlToJson(text);
-    }
-
-    if (url && url.toLowerCase().includes("/download-info")) {
-      const parsed = this.safeJsonParse(text);
-      return this.normalizeResponseShape(parsed, url);
     }
 
     if (text.startsWith("{") || text.startsWith("[")) {
@@ -284,26 +253,19 @@ export class ResponseConverter {
       return this.xmlParser.parse(text);
     }
 
-    return {
-      data: text,
-    };
+    return { data: text };
   }
 
   private toXml(text: string, sourceType: SourceType): string {
     if (!text) return "";
 
-    if (sourceType === "xml") {
-      return text;
-    }
+    if (sourceType === "xml") return text;
 
     if (sourceType === "json") {
-      const parsed = this.safeJsonParse(text);
-      return this.xmlBuilder.build(parsed);
+      return this.xmlBuilder.build(this.safeJsonParse(text));
     }
-
     if (sourceType === "html") {
-      const json = this.htmlToJson(text);
-      return this.xmlBuilder.build(json);
+      return this.xmlBuilder.build(this.htmlToJson(text));
     }
 
     return `<root>${this.escapeXml(text)}</root>`;
@@ -311,35 +273,22 @@ export class ResponseConverter {
 
   private toHtml(text: string, sourceType: SourceType): ParsedResponse {
     if (!text) return null;
-
-    if (sourceType === "html") {
-      return this.htmlToJson(text);
-    }
+    if (sourceType === "html") return this.htmlToJson(text);
 
     if (sourceType === "json") {
-      const parsed = this.safeJsonParse(text);
-      return {
-        html: parsed,
-      };
+      return { html: this.safeJsonParse(text) };
     }
-
     if (sourceType === "xml") {
-      const parsed = this.xmlParser.parse(text);
-      return {
-        xml: parsed,
-      };
+      return { xml: this.xmlParser.parse(text) };
     }
 
     return this.htmlToJson(text);
   }
 
   private htmlToJson(html: string): any {
-    if (this.options.parseHTML === false) {
-      return html;
-    }
+    if (this.options.parseHTML === false) return html;
 
     const $ = cheerio.load(html);
-
     if (this.options.htmlMode === "simple") {
       return {
         title: $("title").text(),
@@ -350,18 +299,15 @@ export class ResponseConverter {
     const result: Record<string, any> = {
       title: $("title").text() || undefined,
       meta: {},
-      body: {
-        text: $("body").text().trim(),
-      },
+      body: { text: $("body").text().trim() },
     };
 
     $("meta").each((_, el) => {
+      const $el = $(el);
       const name =
-        $(el).attr("name") || $(el).attr("property") || $(el).attr("charset");
-      const content = $(el).attr("content") || $(el).attr("value") || "";
-      if (name) {
-        result.meta[name] = content;
-      }
+        $el.attr("name") || $el.attr("property") || $el.attr("charset");
+      const content = $el.attr("content") || $el.attr("value") || "";
+      if (name) result.meta[name] = content;
     });
 
     $("body")
@@ -373,10 +319,7 @@ export class ResponseConverter {
         const text = $(el).text().trim();
         if (!text) return;
 
-        if (!result.body[tag]) {
-          result.body[tag] = [];
-        }
-
+        if (!result.body[tag]) result.body[tag] = [];
         result.body[tag].push(text);
       });
 
@@ -384,8 +327,6 @@ export class ResponseConverter {
   }
 
   private safeJsonParse(text: string): any {
-    if (!text) return null;
-
     try {
       return JSON.parse(text);
     } catch {
@@ -394,41 +335,27 @@ export class ResponseConverter {
   }
 
   private normalizeResponseShape(value: any, url?: string): any {
-    if (value === null || value === undefined) return value;
-    if (Array.isArray(value)) return value;
-    if (typeof value !== "object") return value;
-
-    const obj = value as Record<string, any>;
-
-    if (obj.downloadInfo !== undefined) {
+    if (!value || Array.isArray(value) || typeof value !== "object")
       return value;
-    }
 
-    if (url?.includes("/download-info")) {
-      const candidate = obj.result ?? obj.data ?? obj.response ?? obj;
-
-      if (candidate && typeof candidate === "object") {
-        if (Array.isArray(candidate)) {
-          return {
-            ...obj,
-            downloadInfo: candidate,
-          };
+    if (url && url.includes("/download-info")) {
+      if (value.downloadInfo === undefined) {
+        const candidate = value.result ?? value.data ?? value.response ?? value;
+        if (candidate && typeof candidate === "object") {
+          if (Array.isArray(candidate)) {
+            value.downloadInfo = candidate;
+          } else {
+            Object.assign(value, candidate);
+            value.downloadInfo = candidate.downloadInfo ?? candidate;
+          }
+          return value;
         }
-
-        return {
-          ...obj,
-          ...candidate,
-          downloadInfo: candidate.downloadInfo ?? candidate,
-        };
       }
     }
 
-    const wrapper = obj.result ?? obj.data ?? obj.response;
+    const wrapper = value.result ?? value.data ?? value.response;
     if (wrapper && typeof wrapper === "object" && !Array.isArray(wrapper)) {
-      return {
-        ...obj,
-        ...wrapper,
-      };
+      return Object.assign({}, value, wrapper);
     }
 
     return value;
