@@ -26,6 +26,7 @@ export function withParser(
   pluginOptions?: Partial<ResponseConverterOptions>,
 ): HyperPlugin {
   let mergedGlobalOptions: ResponseConverterOptions;
+  let defaultConverter: ResponseConverter;
 
   return {
     name: "hyperttp-parser",
@@ -37,6 +38,7 @@ export function withParser(
         ...clientConfig.responseConverter,
         ...pluginOptions,
       };
+      defaultConverter = new ResponseConverter(mergedGlobalOptions);
     },
 
     wrapDispatch: (next) => {
@@ -49,12 +51,10 @@ export function withParser(
 
         const parsableReq = req as ParsableRequest;
 
-        const currentOptions = {
-          ...mergedGlobalOptions,
-          ...parsableReq.meta?.responseConverter,
-        };
-
-        const converter = new ResponseConverter(currentOptions);
+        const localOptions = parsableReq.meta?.responseConverter;
+        const converter = localOptions
+          ? new ResponseConverter({ ...mergedGlobalOptions, ...localOptions })
+          : defaultConverter;
 
         const buffer = await converter.readBody(res.body);
 
@@ -73,10 +73,8 @@ export function withParser(
           url: res.url,
         });
 
-        return {
-          ...res,
-          body: parsed as T,
-        };
+        (res as any).body = parsed;
+        return res;
       };
     },
   };
