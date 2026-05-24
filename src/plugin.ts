@@ -3,7 +3,7 @@ import {
   HyperPlugin,
   type InternalRequest,
   type ResponseType,
-  type HttpClientOptions,
+  type PluginContext,
 } from "@hyperttp/core";
 
 import type { ResponseConverterOptions } from "./types/response.js";
@@ -25,47 +25,55 @@ declare module "@hyperttp/core" {
 export function withParser(
   pluginOptions?: Partial<ResponseConverterOptions>,
 ): HyperPlugin {
-  let mergedGlobalOptions: ResponseConverterOptions;
-  let defaultConverter: ResponseConverter;
+  let mergedGlobalOptions: ResponseConverterOptions | null = null;
+  let defaultConverter: ResponseConverter | null = null;
 
   return {
     name: "hyperttp-parser",
     phase: "FORMAT",
     enabled: () => true,
 
-    setup(_core, clientConfig: HttpClientOptions) {
+    setup(ctx: PluginContext) {
       mergedGlobalOptions = {
-        ...clientConfig.responseConverter,
+        ...ctx.config.responseConverter,
         ...pluginOptions,
       };
       defaultConverter = new ResponseConverter(mergedGlobalOptions);
     },
 
-    wrapDispatch: (next) => {
-      return async <T>(req: InternalRequest): Promise<HttpResponse<T>> => {
+    wrapDispatch(next, ctx: PluginContext) {
+      const options = mergedGlobalOptions ?? {
+        ...ctx.config.responseConverter,
+        ...pluginOptions,
+      };
+      const converterInstance =
+        defaultConverter ?? new ResponseConverter(options);
+
+      return async function dispatchWithParser<T>(
+        req: InternalRequest,
+      ): Promise<HttpResponse<T>> {
         const res = await next<T>(req);
 
-        if (req.method === "HEAD") return res;
-        if (!res?.body) return res;
-        if (res.status >= 400) return res;
+        if (req.method === "HEAD" || !res || !res.body || res.status >= 400) {
+          return res;
+        }
 
         const parsableReq = req as ParsableRequest;
-
         const localOptions = parsableReq.meta?.responseConverter;
+
         const converter = localOptions
-          ? new ResponseConverter({ ...mergedGlobalOptions, ...localOptions })
-          : defaultConverter;
+          ? new ResponseConverter({ ...options, ...localOptions })
+          : converterInstance;
 
         const buffer = await converter.readBody(res.body);
-
         const targetType = parsableReq.meta?.responseType ?? "auto";
 
-        const contentType =
-          res.headers["content-type"] || res.headers["Content-Type"];
+        const headers = res.headers;
+        const contentType = headers["content-type"] ?? headers["Content-Type"];
         const contentEncoding =
-          res.headers["content-encoding"] || res.headers["Content-Encoding"];
+          headers["content-encoding"] ?? headers["Content-Encoding"];
 
-        const parsed = await converter.convert(buffer, targetType, {
+        const parsed = converter.convert(buffer, targetType, {
           contentType:
             typeof contentType === "string" ? contentType : undefined,
           contentEncoding:

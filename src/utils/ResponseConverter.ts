@@ -1,5 +1,3 @@
-import * as zlib from "zlib";
-import { promisify } from "util";
 import { XMLParser } from "fast-xml-parser";
 import XMLBuilder from "fast-xml-builder";
 import * as cheerio from "cheerio";
@@ -11,15 +9,13 @@ import type {
   SourceType,
 } from "../types/response.js";
 
-const gunzip = promisify(zlib.gunzip);
-const inflate = promisify(zlib.inflate);
-const brotliDecompress = promisify(zlib.brotliDecompress);
-
 function normalizeContentType(ct?: string): string | undefined {
   if (!ct) return undefined;
   const semiIdx = ct.indexOf(";");
-  const base = semiIdx === -1 ? ct : ct.slice(0, semiIdx);
-  return base.trim().toLowerCase();
+  if (semiIdx === -1) {
+    return ct.toLowerCase();
+  }
+  return ct.slice(0, semiIdx).trim().toLowerCase();
 }
 
 export class ResponseConverter {
@@ -54,9 +50,67 @@ export class ResponseConverter {
       return Buffer.from(ab, 0, ab.byteLength);
     }
 
+    if (Array.isArray(body)) {
+      if (body.length === 0) return Buffer.alloc(0);
+      if (body.length === 1) {
+        const chunk = body[0];
+        return Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      }
+
+      const buffers = new Array(body.length);
+      for (let i = 0; i < body.length; i++) {
+        const chunk = body[i];
+        buffers[i] = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      }
+      return Buffer.concat(buffers);
+    }
+
+    const max = this.options.maxBodySize ?? 0;
+
+    if (typeof body.on === "function") {
+      return new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        let received = 0;
+
+        const onData = (chunk: any) => {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          received += buf.length;
+
+          if (max > 0 && received > max) {
+            cleanup();
+            if (typeof body.destroy === "function") {
+              body.destroy();
+            }
+            reject(new Error(`Response size limit exceeded (${max} bytes)`));
+            return;
+          }
+          chunks.push(buf);
+        };
+
+        const onEnd = () => {
+          cleanup();
+          resolve(Buffer.concat(chunks));
+        };
+
+        const onError = (err: any) => {
+          cleanup();
+          reject(err);
+        };
+
+        const cleanup = () => {
+          body.off("data", onData);
+          body.off("end", onEnd);
+          body.off("error", onError);
+        };
+
+        body.on("data", onData);
+        body.on("end", onEnd);
+        body.on("error", onError);
+      });
+    }
+
     const chunks: Buffer[] = [];
     let received = 0;
-    const max = this.options.maxBodySize ?? 0;
 
     for await (const chunk of body) {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -68,7 +122,6 @@ export class ResponseConverter {
         }
         throw new Error(`Response size limit exceeded (${max} bytes)`);
       }
-
       chunks.push(buf);
     }
 
@@ -104,16 +157,24 @@ export class ResponseConverter {
       if (lower.endsWith(".html") || lower.endsWith(".htm")) return "html";
     }
 
-    if (!text) return "text";
+    if (!text || text.length === 0) return "text";
 
-    const trimmedStart = text.trimStart();
-    if (trimmedStart.length === 0) return "text";
+    let firstChar = "";
+    let firstIdx = 0;
 
-    const firstChar = trimmedStart[0];
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      if (char !== " " && char !== "\n" && char !== "\r" && char !== "\t") {
+        firstChar = char;
+        firstIdx = i;
+        break;
+      }
+    }
+
     if (firstChar === "{" || firstChar === "[") return "json";
 
     if (firstChar === "<") {
-      const sample = trimmedStart.slice(0, 15).toLowerCase();
+      const sample = text.slice(firstIdx, firstIdx + 15).toLowerCase();
       if (sample.startsWith("<!doctype html") || sample.startsWith("<html")) {
         return "html";
       }
@@ -123,45 +184,15 @@ export class ResponseConverter {
     return "text";
   }
 
-  async convert(
+  convert(
     body: Buffer,
     targetType: ResponseType,
     meta: ConversionMeta = {},
-  ): Promise<ParsedResponse> {
-    const charset = this.options.charset ?? "utf-8";
+  ): ParsedResponse {
+    const charset = (this.options.charset ?? "utf-8") as BufferEncoding;
 
-    if (!meta.contentEncoding || body.length === 0) {
-      const text = body.toString(charset);
-      return this.processConversion(body, text, targetType, meta);
-    }
-
-    const text = await this.decodeBodyAsync(
-      body,
-      meta.contentEncoding,
-      charset,
-    );
+    const text = body.toString(charset);
     return this.processConversion(body, text, targetType, meta);
-  }
-
-  private async decodeBodyAsync(
-    body: Buffer,
-    encoding: string,
-    charset: BufferEncoding,
-  ): Promise<string> {
-    try {
-      switch (encoding.toLowerCase()) {
-        case "gzip":
-          return (await gunzip(body)).toString(charset);
-        case "deflate":
-          return (await inflate(body)).toString(charset);
-        case "br":
-          return (await brotliDecompress(body)).toString(charset);
-        default:
-          return body.toString(charset);
-      }
-    } catch {
-      return body.toString(charset);
-    }
   }
 
   private processConversion(
@@ -178,11 +209,11 @@ export class ResponseConverter {
       case "text":
         return text;
       case "json":
-        return this.toJson(text.trim(), sourceType, meta.url);
+        return this.toJson(text, sourceType, meta.url);
       case "xml":
-        return this.toXml(text.trim(), sourceType);
+        return this.toXml(text, sourceType);
       case "html":
-        return this.toHtml(text.trim(), sourceType);
+        return this.toHtml(text, sourceType);
       case "auto":
       default:
         return this.toAuto(text, sourceType, meta.url, body);
@@ -241,13 +272,19 @@ export class ResponseConverter {
       return this.htmlToJson(text);
     }
 
-    if (text.startsWith("{") || text.startsWith("[")) {
+    const firstChar = text.trimStart()[0];
+
+    if (firstChar === "{" || firstChar === "[") {
       const parsed = this.safeJsonParse(text);
       return this.normalizeResponseShape(parsed, url);
     }
 
-    if (text.startsWith("<")) {
-      if (text.startsWith("<html") || text.startsWith("<!doctype html")) {
+    if (firstChar === "<") {
+      if (
+        text.includes("<html") ||
+        text.includes("<!DOCTYPE") ||
+        text.includes("<!doctype")
+      ) {
         return this.htmlToJson(text);
       }
       return this.xmlParser.parse(text);
