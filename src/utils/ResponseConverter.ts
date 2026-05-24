@@ -1,10 +1,5 @@
-import type {
-  ConversionMeta,
-  ParsedResponse,
-  ResponseConverterOptions,
-  ResponseType,
-  SourceType,
-} from "../types/response.js";
+import type { ConversionMeta, ResponseType, SourceType } from "@hyperttp/core";
+import { ParsedResponse, ResponseConverterOptions } from "../types/response.js";
 
 const EMPTY_BUFFER = Buffer.alloc(0);
 
@@ -481,7 +476,7 @@ export class ResponseConverter {
 
       $("body")
         .children()
-        .each((_: any, el: { tagName: string; }) => {
+        .each((_: any, el: { tagName: string }) => {
           const tag = el.tagName?.toLowerCase();
           if (!tag) return;
           const text = $(el).text().trim();

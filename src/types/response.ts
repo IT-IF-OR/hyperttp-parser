@@ -1,4 +1,4 @@
-import type { InternalRequest } from "@hyperttp/core";
+import type { InternalRequest, ResponseType } from "@hyperttp/core";
 
 export interface ResponseConverterOptions {
   /**
@@ -36,40 +36,6 @@ export type ParsedResponse =
   | Record<string, any>
   | any[]
   | null;
-
-/**
- * @ru Метаданные для конвертации ответа
- * @en Response conversion metadata
- */
-export interface ConversionMeta {
-  /**
-   * @ru Content-Type заголовок
-   * @en Content-Type header
-   */
-  contentType?: string;
-  /**
-   * @ru Content-Encoding заголовок
-   * @en Content-Encoding header
-   */
-  contentEncoding?: string;
-  /**
-   * @ru URL запроса
-   * @en Request URL
-   */
-  url?: string;
-}
-
-export type ResponseType =
-  | "auto"
-  | "json"
-  | "text"
-  | "xml"
-  | "html"
-  | "buffer"
-  | "blob"
-  | "stream";
-
-export type SourceType = "json" | "xml" | "html" | "text" | "buffer";
 
 /**
  * @ru Интерфейс внутреннего запроса, содержащий конфигурацию для `hyperttp-parser`
