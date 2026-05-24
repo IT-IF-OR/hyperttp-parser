@@ -1,3 +1,5 @@
+import type { InternalRequest } from "@hyperttp/core";
+
 export interface ResponseConverterOptions {
   /**
    * @ru Максимальный размер тела ответа (байты), 0 = без ограничений
@@ -64,6 +66,33 @@ export type ResponseType =
   | "xml"
   | "html"
   | "buffer"
+  | "blob"
   | "stream";
 
 export type SourceType = "json" | "xml" | "html" | "text" | "buffer";
+
+/**
+ * @ru Интерфейс внутреннего запроса, содержащий конфигурацию для `hyperttp-parser`
+ * @en Internal request interface containing configuration for `hyperttp-parser`
+ */
+export interface ParsableRequest extends InternalRequest {
+  meta?: {
+    /**
+     * @ru Локальные настройки конвертера, переопределяющие глобальные для этого конкретного запроса
+     * @en Local converter options overriding global ones for this specific request
+     */
+    responseConverter?: ResponseConverterOptions;
+
+    /**
+     * @ru Явно указанный тип ответа, к которому нужно привести результат
+     * @en Explicitly specified response type to cast the result to
+     */
+    responseType?: ResponseType;
+
+    /**
+     * @ru Сигнатура для поддержки остальных мета-полей других плагинов ядра
+     * @en Index signature to support other meta fields from core plugins
+     */
+    [key: string]: any;
+  };
+}
