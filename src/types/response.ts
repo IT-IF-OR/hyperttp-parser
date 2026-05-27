@@ -1,4 +1,4 @@
-import type { InternalRequest, ResponseType } from "@hyperttp/core";
+import type { InternalRequest, ResponseType } from "@hyperttp/types";
 
 export interface ResponseConverterOptions {
   /**

@@ -1,4 +1,4 @@
-import type { ConversionMeta, ResponseType, SourceType } from "@hyperttp/core";
+import type { ConversionMeta, ResponseType, SourceType } from "@hyperttp/types";
 import { ParsedResponse, ResponseConverterOptions } from "../types/response.js";
 
 const EMPTY_BUFFER = Buffer.alloc(0);
