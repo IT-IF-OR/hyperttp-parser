@@ -39,16 +39,10 @@ export function withParser(
   return {
     name: "hyperttp-parser",
 
-    /**
-     * @ru Проверка активации плагина. Всегда возвращает true, так как парсинг необходим по умолчанию.
-     * @en Evaluates plugin activation. Always returns true as parsing is required by default.
-     */
-    enabled: (): boolean => true,
+    phase: "FORMAT",
 
     /**
-     * @ru Хук инициализации. Настраивает глобальные опции парсера и дефолтный конвертер.
-     * @en Initialization hook. Configures global parser options and the default converter instance.
-     * @param ctx - Shared plugin execution context.
+     * @ru Хук инициализации. Настраивает глобальные опции и связывает конвертер с ядром.
      */
     setup(ctx: PluginContext): void {
       globalOptions = {
@@ -56,22 +50,20 @@ export function withParser(
         ...pluginOptions,
       };
 
-      defaultConverter = new ResponseConverter(globalOptions);
+      defaultConverter = new ResponseConverter(ctx.core, globalOptions);
     },
 
     /**
-     * @ru Перехватчик фазы успешного ответа. Выполняет асинхронную конвертацию сырого тела ответа.
-     * @en Response phase interceptor hook. Performs asynchronous conversion of the raw response body.
-     * @param res - Output HTTP client response reference.
-     * @param req - Contextual internal request parameters.
+     * @ru Перехватчик фазы успешного ответа. Выполняет асинхронную конвертацию.
      */
     async onResponse(
       res: HttpResponse<any>,
-      req: InternalRequest,
+      req?: InternalRequest,
+      ctx?: PluginContext,
     ): Promise<void> {
       if (
         !res ||
-        req.method === "HEAD" ||
+        req!.method === "HEAD" ||
         res.status >= 400 ||
         res.body == null
       ) {
@@ -95,7 +87,7 @@ export function withParser(
         if (cached) {
           converter = cached;
         } else {
-          converter = new ResponseConverter({
+          converter = new ResponseConverter(ctx!.core, {
             ...globalOptions,
             ...localOptions,
           });
@@ -109,13 +101,14 @@ export function withParser(
       const contentEncoding =
         headers["content-encoding"] ?? headers["Content-Encoding"];
 
-      const parsed = await converter.convertAsync(res.body, targetType, {
+      const parsed = await converter.convertAsync(res, targetType, {
         contentType: typeof contentType === "string" ? contentType : undefined,
         contentEncoding:
           typeof contentEncoding === "string" ? contentEncoding : undefined,
         url: res.url,
       });
 
+      // Перезаписываем body результатом нативного парсинга
       res.body = parsed;
     },
   };

@@ -1,454 +1,512 @@
-import type { ConversionMeta, ResponseType, SourceType } from "@hyperttp/types";
-import { ParsedResponse, ResponseConverterOptions } from "../types/response.js";
+import type { ConversionMeta, ResponseType, IHyperCore } from "@hyperttp/types";
+
+import type {
+  ParsedResponse,
+  ResponseConverterOptions,
+} from "../types/response.js";
 
 const EMPTY_BUFFER = Buffer.alloc(0);
 
-function normalizeContentType(ct?: string): string | undefined {
-  if (!ct) return undefined;
-  const semiIdx = ct.indexOf(";");
-  return (semiIdx === -1 ? ct : ct.slice(0, semiIdx)).trim().toLowerCase();
+type InternalTargetType = ResponseType | "html";
+
+interface CheerioWrapper {
+  text(): string;
+  attr(name: string): string | undefined;
+  children(): CheerioWrapper;
+  each(callback: (index: number, element: unknown) => void): CheerioWrapper;
 }
 
-function isWhitespaceByte(byte: number): boolean {
-  return byte === 32 || byte === 9 || byte === 10 || byte === 13;
+interface CheerioAPI {
+  load(html: string): (selector: unknown) => CheerioWrapper;
+}
+
+interface XmlParserInstance {
+  parse(text: string): unknown;
+}
+
+interface NodeStreamLike {
+  on(event: string, listener: (...args: any[]) => void): void;
+  off(event: string, listener: (...args: any[]) => void): void;
+  destroy?(): void;
+}
+
+type MaybeRawResponse<T = unknown> = {
+  raw?: T;
+};
+
+function extractRaw<T>(target: T | MaybeRawResponse<T>): T {
+  if (target != null && typeof target === "object") {
+    const raw = (target as any).raw;
+    if (raw !== undefined) {
+      return raw;
+    }
+  }
+  return target as T;
+}
+
+interface TransportResponseLike {
+  text(): Promise<string>;
+  json(): Promise<unknown>;
+  body: unknown;
+  headers: Record<string, string | string[]>;
+  url: string;
+  dump?(): Promise<void>;
+}
+
+function normalizeContentType(ct?: string): string | undefined {
+  if (!ct) return undefined;
+
+  const semi = ct.indexOf(";");
+
+  return (semi === -1 ? ct : ct.slice(0, semi)).trim().toLowerCase();
 }
 
 export class ResponseConverter {
-  private _xmlParser: any | null = null;
-  private _xmlBuilder: any | null = null;
-  private _cheerio: any | null = null;
+  private _xmlParser: XmlParserInstance | null = null;
+  private _cheerio: CheerioAPI | null = null;
 
-  constructor(private readonly options: ResponseConverterOptions = {}) {}
+  constructor(
+    protected readonly core: IHyperCore,
+    protected readonly options: ResponseConverterOptions = {},
+  ) {}
 
-  private async getXmlParser(): Promise<any> {
-    if (!this._xmlParser) {
-      const mod = await import("fast-xml-parser");
-      const XMLParserCtor = (mod as any).XMLParser;
-      this._xmlParser = new XMLParserCtor({
-        ignoreAttributes: false,
-        attributeNamePrefix: "@_",
-        parseTagValue: false,
-        parseAttributeValue: false,
-        trimValues: true,
-      });
-    }
-    return this._xmlParser;
-  }
+  // =========================================================
+  // PUBLIC API
+  // =========================================================
 
-  private async getXmlBuilder(): Promise<any> {
-    if (!this._xmlBuilder) {
-      const mod = await import("fast-xml-builder");
-      const XMLBuilderCtor =
-        (mod as any).default ?? (mod as any).XMLBuilder ?? mod;
-      this._xmlBuilder = new XMLBuilderCtor({
-        ignoreAttributes: false,
-        attributeNamePrefix: "@_",
-        format: false,
-      });
-    }
-    return this._xmlBuilder;
-  }
-
-  private async getCheerio(): Promise<any> {
-    if (!this._cheerio) {
-      const mod = await import("cheerio");
-      this._cheerio = (mod as any).default ?? mod;
-    }
-    return this._cheerio;
-  }
-
-  async convertAsync(
-    body: any,
+  public async convertAsync(
+    target: unknown,
     targetType: ResponseType,
     meta: ConversionMeta = {},
   ): Promise<ParsedResponse> {
-    const buffer = await this.readBody(body);
-    return Promise.resolve(this.convertFromBuffer(buffer, targetType, meta));
+    if (target == null) {
+      return null;
+    }
+
+    const source = extractRaw(target);
+
+    // =========================================================
+    // FAST TRANSPORT PATH
+    // =========================================================
+
+    if (this.isTransportResponseLike(source)) {
+      const contentType =
+        meta.contentType ?? this.extractContentType(source.headers);
+      const url = meta.url ?? source.url;
+
+      if (targetType === "stream") {
+        return source.body as ParsedResponse;
+      }
+
+      const isLiveStream =
+        (typeof globalThis.ReadableStream !== "undefined" &&
+          source.body instanceof globalThis.ReadableStream) ||
+        this.isNodeStream(source.body);
+
+      if (source.body != null && !isLiveStream) {
+        if (
+          typeof source.body === "object" &&
+          !Buffer.isBuffer(source.body) &&
+          !(source.body instanceof ArrayBuffer) &&
+          !ArrayBuffer.isView(source.body)
+        ) {
+          if (targetType === "json" || targetType === "auto") {
+            return source.body as ParsedResponse;
+          }
+        }
+
+        const buffer = await this.readBody(source.body);
+        return this.convertFromBuffer(buffer, targetType, meta);
+      }
+
+      if (targetType === "buffer") {
+        return this.readBody(source.body);
+      }
+
+      if (targetType === "text") {
+        try {
+          return await source.text();
+        } catch {
+          const buffer = await this.readBody(source.body);
+          return buffer.toString(this.options.charset ?? "utf-8");
+        }
+      }
+
+      if (targetType === "json") {
+        return this.safeNativeJson(source);
+      }
+
+      let detected = this.detectSourceType(contentType, url);
+
+      if (detected === "buffer") {
+        return this.readBody(source.body);
+      }
+
+      if (detected === "text") {
+        try {
+          return await source.text();
+        } catch {
+          const buffer = await this.readBody(source.body);
+          return buffer.toString(this.options.charset ?? "utf-8");
+        }
+      }
+
+      if (detected === "json") {
+        return this.safeNativeJson(source);
+      }
+
+      let text = "";
+      try {
+        text = await source.text();
+      } catch {
+        if (source.body) {
+          const buffer = await this.readBody(source.body);
+          text = buffer.toString(this.options.charset ?? "utf-8");
+        }
+      }
+
+      if (!text && source.body) {
+        try {
+          const buffer = await this.readBody(source.body);
+          text = buffer.toString(this.options.charset ?? "utf-8");
+        } catch {
+          //
+        }
+      }
+
+      if (!text) {
+        return "";
+      }
+
+      if (detected === "auto") {
+        detected = this.guessTypeFromText(text);
+      }
+
+      switch (detected) {
+        case "json":
+          return this.safeJsonParse(text);
+
+        case "html":
+          return this.htmlToJson(text);
+
+        case "xml":
+          return (await this.getXmlParser()).parse(text) as ParsedResponse;
+
+        default:
+          return text;
+      }
+    }
+
+    if (Buffer.isBuffer(target)) {
+      return targetType === "text"
+        ? target.toString(this.options.charset ?? "utf-8")
+        : target;
+    }
+
+    if (typeof target === "string") {
+      if (targetType === "json") {
+        return this.safeJsonParse(target);
+      }
+
+      return target;
+    }
+
+    const body = await this.readBody(target);
+
+    return this.convertFromBuffer(body, targetType, meta);
   }
 
-  async readBody(body: any): Promise<Buffer> {
-    if (!body) return EMPTY_BUFFER;
-    if (Buffer.isBuffer(body)) return body;
-    if (typeof body === "string") return Buffer.from(body, "utf-8");
+  private async safeNativeJson(
+    source: TransportResponseLike,
+  ): Promise<ParsedResponse> {
+    try {
+      const targetSource =
+        typeof (source as any).clone === "function"
+          ? (source as any).clone()
+          : source;
+      const res = await targetSource.json();
+      if (res !== undefined && res !== null) {
+        return res as ParsedResponse;
+      }
+      throw new Error("Empty json target");
+    } catch {
+      try {
+        if (source.body) {
+          const buffer = await this.readBody(source.body);
+          const text = buffer.toString("utf-8");
+          return text ? this.safeJsonParse(text) : null;
+        }
+      } catch {
+        //
+      }
+      return { data: undefined } as ParsedResponse;
+    }
+  }
 
-    if (typeof body.arrayBuffer === "function") {
+  public async dumpAsync(target: unknown): Promise<void> {
+    if (target == null) return;
+
+    const source = extractRaw(target);
+
+    if (typeof source === "object" && source !== null) {
+      if (
+        "dump" in source &&
+        typeof (source as Record<string, unknown>).dump === "function"
+      ) {
+        await (source as { dump(): Promise<void> }).dump();
+        return;
+      }
+
+      if (
+        typeof globalThis.ReadableStream !== "undefined" &&
+        source instanceof globalThis.ReadableStream
+      ) {
+        if (!source.locked) {
+          await source.cancel();
+        }
+
+        return;
+      }
+
+      if (
+        "destroy" in source &&
+        typeof (source as Record<string, unknown>).destroy === "function"
+      ) {
+        (source as { destroy(): void }).destroy();
+        return;
+      }
+    }
+
+    try {
+      if (this.isAsyncIterable(source)) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        for await (const _ of source) {
+          //
+        }
+      }
+    } catch {
+      //
+    }
+  }
+
+  public async readBody(body: unknown): Promise<Buffer> {
+    if (body == null) {
+      return EMPTY_BUFFER;
+    }
+
+    if (Buffer.isBuffer(body)) {
+      return body;
+    }
+
+    if (typeof body === "string") {
+      return Buffer.from(body, "utf-8");
+    }
+
+    if (body instanceof ArrayBuffer) {
+      return Buffer.from(body);
+    }
+
+    if (ArrayBuffer.isView(body)) {
+      if (body instanceof DataView) {
+        return Buffer.from(
+          body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+        );
+      }
+
+      return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+    }
+
+    if (typeof Blob !== "undefined" && body instanceof Blob) {
       const ab = await body.arrayBuffer();
+
+      this.checkSizeLimit(ab.byteLength, this.options.maxBodySize ?? 0);
+
+      return Buffer.from(ab);
+    }
+
+    const maxBytes = this.options.maxBodySize ?? 0;
+
+    if (
+      typeof globalThis.ReadableStream !== "undefined" &&
+      body instanceof globalThis.ReadableStream
+    ) {
+      const response = new Response(body as ReadableStream<Uint8Array>);
+
+      const ab = await response.arrayBuffer();
+
+      this.checkSizeLimit(ab.byteLength, maxBytes);
+
+      return Buffer.from(ab);
+    }
+
+    if (this.hasArrayBufferMethod(body)) {
+      const ab = await body.arrayBuffer();
+
+      this.checkSizeLimit(ab.byteLength, maxBytes);
+
       return Buffer.from(ab);
     }
 
     if (Array.isArray(body)) {
-      if (body.length === 0) return EMPTY_BUFFER;
-      if (body.length === 1) {
-        const chunk = body[0];
-        return Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (body.length === 0) {
+        return EMPTY_BUFFER;
       }
 
-      const buffers = new Array<Buffer>(body.length);
-      let total = 0;
+      const buffers = body.map((chunk) =>
+        Buffer.isBuffer(chunk)
+          ? chunk
+          : Buffer.from(chunk as string | Uint8Array),
+      );
 
-      for (let i = 0; i < body.length; i++) {
-        const chunk = body[i];
-        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        buffers[i] = buf;
-        total += buf.length;
-      }
+      const total = buffers.reduce((acc, chunk) => acc + chunk.length, 0);
 
       return Buffer.concat(buffers, total);
     }
 
-    const max = this.options.maxBodySize ?? 0;
-
-    if (typeof body.on === "function") {
-      return new Promise<Buffer>((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        let received = 0;
-
-        const cleanup = () => {
-          body.off("data", onData);
-          body.off("end", onEnd);
-          body.off("error", onError);
-        };
-
-        const onData = (chunk: any) => {
-          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          received += buf.length;
-
-          if (max > 0 && received > max) {
-            cleanup();
-            if (typeof body.destroy === "function") body.destroy();
-            reject(new Error(`Response size limit exceeded (${max} bytes)`));
-            return;
-          }
-
-          chunks.push(buf);
-        };
-
-        const onEnd = () => {
-          cleanup();
-
-          if (chunks.length === 0) {
-            resolve(EMPTY_BUFFER);
-            return;
-          }
-
-          if (chunks.length === 1) {
-            resolve(chunks[0]);
-            return;
-          }
-
-          resolve(Buffer.concat(chunks, received));
-        };
-
-        const onError = (err: any) => {
-          cleanup();
-          reject(err);
-        };
-
-        body.on("data", onData);
-        body.on("end", onEnd);
-        body.on("error", onError);
-      });
+    if (this.isNodeStream(body)) {
+      return this.readNodeStream(body, maxBytes);
     }
 
-    const chunks: Buffer[] = [];
-    let received = 0;
-
-    for await (const chunk of body) {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      received += buf.length;
-
-      if (max > 0 && received > max) {
-        if (typeof body.destroy === "function") body.destroy();
-        throw new Error(`Response size limit exceeded (${max} bytes)`);
-      }
-
-      chunks.push(buf);
+    if (this.isAsyncIterable(body)) {
+      return this.readAsyncIterable(body, maxBytes);
     }
 
-    if (chunks.length === 0) return EMPTY_BUFFER;
-    if (chunks.length === 1) return chunks[0];
-
-    return Buffer.concat(chunks, received);
+    return Buffer.from(JSON.stringify(body), "utf-8");
   }
 
-  detectSourceType(
-    contentType?: string,
-    text?: string,
-    url?: string,
-  ): SourceType {
-    const ct = normalizeContentType(contentType);
-    if (ct) {
-      if (ct === "application/json" || ct.endsWith("+json")) return "json";
-      if (ct === "text/html") return "html";
-      if (ct === "application/xml" || ct === "text/xml") return "xml";
-      if (
-        ct.startsWith("image/") ||
-        ct.startsWith("audio/") ||
-        ct.startsWith("video/") ||
-        ct === "application/octet-stream"
-      ) {
-        return "buffer";
-      }
-    }
-
-    if (url) {
-      const lower = url.toLowerCase();
-      if (lower.endsWith(".json")) return "json";
-      if (lower.endsWith(".xml")) return "xml";
-      if (lower.endsWith(".html") || lower.endsWith(".htm")) return "html";
-    }
-
-    if (!text || text.length === 0) return "text";
-
-    let firstChar = "";
-    const scanLimit = Math.min(text.length, 128);
-
-    for (let i = 0; i < scanLimit; i++) {
-      const c = text.charCodeAt(i);
-      if (!isWhitespaceByte(c)) {
-        firstChar = text[i];
-        break;
-      }
-    }
-
-    if (firstChar === "{" || firstChar === "[") return "json";
-    if (firstChar === "<") return "xml";
-    return "text";
-  }
-
-  private detectSourceTypeFromBuffer(body: Buffer, url?: string): SourceType {
-    if (body.length === 0) return "text";
-
-    const limit = Math.min(body.length, 256);
-    let firstIdx = 0;
-
-    while (firstIdx < limit && isWhitespaceByte(body[firstIdx])) {
-      firstIdx++;
-    }
-
-    if (firstIdx >= limit) return "text";
-
-    const first = body[firstIdx];
-
-    if (first === 123 || first === 91) return "json";
-
-    if (first === 60) {
-      const sample = body
-        .subarray(firstIdx, Math.min(body.length, firstIdx + 64))
-        .toString("utf8")
-        .toLowerCase();
-
-      if (
-        sample.startsWith("<!doctype html") ||
-        sample.startsWith("<html") ||
-        sample.includes("<html")
-      ) {
-        return "html";
-      }
-
-      return "xml";
-    }
-
-    if (url) {
-      const lower = url.toLowerCase();
-      if (lower.endsWith(".json")) return "json";
-      if (lower.endsWith(".xml")) return "xml";
-      if (lower.endsWith(".html") || lower.endsWith(".htm")) return "html";
-    }
-
-    return "text";
-  }
-
-  convertFromBuffer(
+  public convertFromBuffer(
     body: Buffer,
     targetType: ResponseType,
     meta: ConversionMeta = {},
   ): ParsedResponse | Promise<ParsedResponse> {
-    if (targetType === "buffer") return body;
+    if (targetType === "buffer") {
+      return body;
+    }
 
-    const charset = (this.options.charset ?? "utf-8") as BufferEncoding;
-    const contentType = meta.contentType;
-    const url = meta.url;
+    const encoding = (this.options.charset ?? "utf-8") as BufferEncoding;
 
-    let sourceType = this.detectSourceType(contentType, undefined, url);
     let textCache: string | null = null;
 
-    const getText = () => {
-      if (textCache === null) {
-        textCache = body.toString(charset);
+    const getText = (): string => {
+      if (textCache == null) {
+        textCache = body.toString(encoding);
       }
+
       return textCache;
     };
 
-    if (sourceType === "text" && body.length > 0) {
-      sourceType = this.detectSourceTypeFromBuffer(body, url);
+    let detected = this.detectSourceType(meta.contentType, meta.url);
+
+    if (detected === "auto") {
+      detected = this.guessTypeFromText(getText());
     }
 
-    switch (targetType) {
+    const finalType =
+      targetType === "auto" ? detected : (targetType as InternalTargetType);
+
+    switch (finalType) {
       case "text":
         return getText();
 
-      case "json": {
-        const text = getText();
-        if (!text) return null;
-        return this.toJson(text, sourceType, url);
-      }
+      case "json":
+        return getText() ? this.safeJsonParse(getText()) : null;
 
-      case "xml": {
-        const text = getText();
-        if (!text) return "";
-        return this.toXml(text, sourceType);
-      }
+      case "xml":
+        return getText()
+          ? this.getXmlParser().then((p) => p.parse(getText()))
+          : "";
 
-      case "html": {
-        const text = getText();
-        if (!text) return null;
-        return this.toHtml(text, sourceType);
-      }
+      case "html":
+        return getText() ? this.htmlToJson(getText()) : null;
 
-      case "auto":
       default:
-        return this.toAuto(sourceType, body, getText, url);
+        return getText();
     }
   }
 
-  private toAuto(
-    sourceType: SourceType,
-    rawBody: Buffer,
-    getText: () => string,
+  public detectSourceType(
+    contentType?: string,
     url?: string,
-  ): ParsedResponse | Promise<ParsedResponse> {
-    if (sourceType === "buffer") return rawBody;
+  ): InternalTargetType {
+    if (contentType) {
+      if (
+        contentType.startsWith("application/json") ||
+        contentType.startsWith("application/json;")
+      ) {
+        return "json";
+      }
+      if (
+        contentType.startsWith("text/html") ||
+        contentType.startsWith("text/html;")
+      ) {
+        return "html";
+      }
+      if (
+        contentType.startsWith("application/xml") ||
+        contentType.startsWith("text/xml")
+      ) {
+        return "xml";
+      }
 
-    if (sourceType === "json") {
-      const text = getText();
-      return text ? this.safeJsonParse(text) : null;
+      const ct = normalizeContentType(contentType);
+      if (ct) {
+        if (ct === "application/json" || ct.endsWith("+json")) return "json";
+        if (ct === "text/html") return "html";
+        if (ct === "application/xml" || ct === "text/xml") return "xml";
+        if (
+          ct.startsWith("image/") ||
+          ct.startsWith("audio/") ||
+          ct.startsWith("video/") ||
+          ct === "application/octet-stream"
+        ) {
+          return "buffer";
+        }
+      }
     }
-
-    if (sourceType === "xml") {
-      const text = getText();
-      return text ? this.getXmlParser().then((p) => p.parse(text)) : null;
-    }
-
-    if (sourceType === "html") {
-      const text = getText();
-      return text ? this.htmlToJson(text) : null;
-    }
-
-    const text = getText();
-    if (!text) return null;
 
     if (url) {
-      const lower = url.toLowerCase();
-      if (lower.endsWith(".json")) return this.safeJsonParse(text);
-      if (lower.endsWith(".xml"))
-        return this.getXmlParser().then((p) => p.parse(text));
-      if (lower.endsWith(".html") || lower.endsWith(".htm")) {
-        return this.htmlToJson(text);
+      const idx = url.lastIndexOf(".");
+      if (idx !== -1) {
+        const ext = url.slice(idx).toLowerCase();
+        if (ext === ".json") return "json";
+        if (ext === ".xml") return "xml";
+        if (ext === ".html" || ext === ".htm") {
+          return "html";
+        }
       }
     }
 
-    let firstChar = "";
-    const scanLimit = Math.min(text.length, 100);
-
-    for (let i = 0; i < scanLimit; i++) {
-      const c = text.charCodeAt(i);
-      if (!isWhitespaceByte(c)) {
-        firstChar = text[i];
-        break;
-      }
-    }
-
-    if (firstChar === "{" || firstChar === "[") {
-      return this.safeJsonParse(text);
-    }
-
-    if (firstChar === "<") {
-      const sample = text.slice(0, 64).toLowerCase();
-      if (sample.startsWith("<!doctype html") || sample.startsWith("<html")) {
-        return this.htmlToJson(text);
-      }
-      return this.getXmlParser().then((p) => p.parse(text));
-    }
-
-    return text;
+    return "auto";
   }
 
-  private toJson(
-    text: string,
-    sourceType: SourceType,
-    url?: string,
-  ): ParsedResponse | Promise<ParsedResponse> {
-    if (!text) return null;
-    if (sourceType === "json") return this.safeJsonParse(text);
-    if (sourceType === "xml")
-      return this.getXmlParser().then((p) => p.parse(text));
-    if (sourceType === "html") return this.htmlToJson(text);
+  private guessTypeFromText(text: string): InternalTargetType {
+    if (!text) return "text";
 
-    let firstChar = "";
-    let firstIdx = 0;
-    const scanLimit = Math.min(text.length, 256);
+    let i = 0;
+    while (i < text.length && text.charCodeAt(i) <= 32) {
+      i++;
+    }
+    if (i >= text.length) return "text";
 
-    for (let i = 0; i < scanLimit; i++) {
-      const c = text.charCodeAt(i);
-      if (!isWhitespaceByte(c)) {
-        firstChar = text[i];
-        firstIdx = i;
-        break;
-      }
+    const char = text.charAt(i);
+    if (char === "{" || char === "[") {
+      return "json";
     }
 
-    if (firstChar === "{" || firstChar === "[") {
-      const parsed = this.safeJsonParse(text);
-      return this.normalizeResponseShape(parsed, url);
+    if (char === "<") {
+      const sample = text.slice(i, i + 14).toLowerCase();
+      return sample.startsWith("<!doctype html") || sample.startsWith("<html")
+        ? "html"
+        : "xml";
     }
 
-    if (firstChar === "<") {
-      const sample = text.slice(firstIdx, firstIdx + 64).toLowerCase();
-      if (sample.includes("<html") || sample.includes("<!doctype")) {
-        return this.htmlToJson(text);
-      }
-      return this.getXmlParser().then((p) => p.parse(text));
-    }
-
-    return { data: text };
-  }
-
-  private toXml(
-    text: string,
-    sourceType: SourceType,
-  ): string | Promise<string> {
-    if (!text) return "";
-    if (sourceType === "xml") return text;
-
-    if (sourceType === "json") {
-      return this.getXmlBuilder().then((b) =>
-        b.build(this.safeJsonParse(text)),
-      );
-    }
-
-    if (sourceType === "html") {
-      return this.getXmlBuilder().then((b) => b.build(this.htmlToJson(text)));
-    }
-
-    return `<root>${this.escapeXml(text)}</root>`;
-  }
-
-  private toHtml(
-    text: string,
-    sourceType: SourceType,
-  ): ParsedResponse | Promise<ParsedResponse> {
-    if (!text) return null;
-    if (sourceType === "html") return this.htmlToJson(text);
-    if (sourceType === "json") return { html: this.safeJsonParse(text) };
-    if (sourceType === "xml") {
-      return this.getXmlParser().then((p) => ({ xml: p.parse(text) }));
-    }
-    return this.htmlToJson(text);
+    return "text";
   }
 
   private htmlToJson(html: string): ParsedResponse | Promise<ParsedResponse> {
-    if (this.options.parseHTML === false) return html;
+    if (this.options.parseHTML === false) {
+      return html;
+    }
 
     return this.getCheerio().then((cheerio) => {
       const $ = cheerio.load(html);
@@ -460,88 +518,231 @@ export class ResponseConverter {
         };
       }
 
-      const result: Record<string, any> = {
+      const result = {
         title: $("title").text() || undefined,
-        meta: {},
-        body: { text: $("body").text().trim() },
+        meta: {} as Record<string, string>,
+        body: {
+          text: $("body").text().trim(),
+        } as Record<string, unknown>,
       };
 
-      $("meta").each((_: any, el: any) => {
+      $("meta").each((_, el) => {
         const $el = $(el);
+
         const name =
           $el.attr("name") || $el.attr("property") || $el.attr("charset");
+
         const content = $el.attr("content") || $el.attr("value") || "";
-        if (name) result.meta[name] = content;
+
+        if (name) {
+          result.meta[name] = content;
+        }
       });
 
       $("body")
         .children()
-        .each((_: any, el: { tagName: string }) => {
-          const tag = el.tagName?.toLowerCase();
+        .each((_, el) => {
+          const tag = (el as { tagName?: string }).tagName?.toLowerCase();
+
           if (!tag) return;
+
           const text = $(el).text().trim();
+
           if (!text) return;
-          if (!result.body[tag]) result.body[tag] = [];
-          result.body[tag].push(text);
+
+          if (!result.body[tag]) {
+            result.body[tag] = [];
+          }
+
+          (result.body[tag] as string[]).push(text);
         });
 
-      return result;
+      return result as ParsedResponse;
     });
   }
 
-  private safeJsonParse(text: string): any {
+  private isTransportResponseLike(obj: unknown): obj is TransportResponseLike {
+    return (
+      obj != null &&
+      typeof obj === "object" &&
+      typeof (obj as any).json === "function" &&
+      typeof (obj as any).text === "function"
+    );
+  }
+
+  private extractContentType(
+    headers: Record<string, string | string[]>,
+  ): string | undefined {
+    const raw = headers["content-type"] ?? headers["Content-Type"];
+
+    return Array.isArray(raw) ? raw[0] : raw;
+  }
+
+  private safeJsonParse(text: string): ParsedResponse {
     try {
-      return JSON.parse(text);
+      return JSON.parse(text) as ParsedResponse;
     } catch {
-      return { data: text };
+      return {
+        data: text,
+      } as ParsedResponse;
     }
   }
 
-  private normalizeResponseShape(value: any, url?: string): any {
-    if (!value || Array.isArray(value) || typeof value !== "object") {
-      return value;
+  private checkSizeLimit(size: number, max: number): void {
+    if (max > 0 && size > max) {
+      throw new Error(`Response size limit exceeded (${max} bytes)`);
+    }
+  }
+
+  private isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
+    if (value == null || typeof value !== "object") {
+      return false;
     }
 
-    if (url && url.includes("/download-info")) {
-      if (value.downloadInfo === undefined) {
-        const candidate = value.result ?? value.data ?? value.response ?? value;
-        if (candidate && typeof candidate === "object") {
-          if (Array.isArray(candidate)) {
-            value.downloadInfo = candidate;
-          } else {
-            for (const key in candidate) {
-              value[key] = candidate[key];
-            }
-            value.downloadInfo = candidate.downloadInfo ?? candidate;
+    const iterator = Reflect.get(value, Symbol.asyncIterator);
+
+    return typeof iterator === "function";
+  }
+
+  private hasArrayBufferMethod(value: unknown): value is {
+    arrayBuffer(): Promise<ArrayBuffer>;
+  } {
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "arrayBuffer" in value &&
+      typeof (value as Record<string, unknown>).arrayBuffer === "function"
+    );
+  }
+
+  private isNodeStream(value: unknown): value is NodeStreamLike {
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "on" in value &&
+      typeof (value as Record<string, unknown>).on === "function"
+    );
+  }
+
+  private async readNodeStream(
+    emitter: NodeStreamLike,
+    max: number,
+  ): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let received = 0;
+
+      const cleanup = () => {
+        emitter.off("data", onData);
+        emitter.off("end", onEnd);
+        emitter.off("error", onError);
+      };
+
+      const onData = (chunk: unknown) => {
+        const buf = Buffer.isBuffer(chunk)
+          ? chunk
+          : Buffer.from(chunk as string | Uint8Array);
+
+        received += buf.length;
+
+        if (max > 0 && received > max) {
+          cleanup();
+
+          if (typeof emitter.destroy === "function") {
+            emitter.destroy();
           }
-          return value;
+
+          reject(new Error(`Response size limit exceeded (${max} bytes)`));
+
+          return;
         }
+
+        chunks.push(buf);
+      };
+
+      const onEnd = () => {
+        cleanup();
+
+        resolve(
+          chunks.length === 0
+            ? EMPTY_BUFFER
+            : chunks.length === 1
+              ? chunks[0]!
+              : Buffer.concat(chunks, received),
+        );
+      };
+
+      const onError = (err: unknown) => {
+        cleanup();
+        reject(err);
+      };
+
+      emitter.on("data", onData);
+      emitter.on("end", onEnd);
+      emitter.on("error", onError);
+    });
+  }
+
+  private async readAsyncIterable(
+    iterable: AsyncIterable<unknown>,
+    max: number,
+  ): Promise<Buffer> {
+    const chunks: Buffer[] = [];
+    let received = 0;
+
+    for await (const chunk of iterable) {
+      const buf = Buffer.isBuffer(chunk)
+        ? chunk
+        : Buffer.from(chunk as string | Uint8Array);
+
+      received += buf.length;
+
+      if (max > 0 && received > max) {
+        if (
+          "destroy" in iterable &&
+          typeof (iterable as { destroy?: () => void }).destroy === "function"
+        ) {
+          (iterable as { destroy(): void }).destroy();
+        }
+
+        throw new Error(`Response size limit exceeded (${max} bytes)`);
       }
+
+      chunks.push(buf);
     }
 
-    const wrapper = value.result ?? value.data ?? value.response;
-    if (wrapper && typeof wrapper === "object" && !Array.isArray(wrapper)) {
-      const merged: Record<string, any> = {};
-      for (const key in value) merged[key] = value[key];
-      for (const key in wrapper) merged[key] = wrapper[key];
-      return merged;
+    return chunks.length === 0
+      ? EMPTY_BUFFER
+      : chunks.length === 1
+        ? chunks[0]!
+        : Buffer.concat(chunks, received);
+  }
+
+  private async getXmlParser(): Promise<XmlParserInstance> {
+    if (!this._xmlParser) {
+      const mod = (await import("fast-xml-parser")) as {
+        XMLParser: new (options?: unknown) => XmlParserInstance;
+      };
+
+      this._xmlParser = new mod.XMLParser({
+        ignoreAttributes: false,
+        attributeNamePrefix: "@_",
+        parseTagValue: false,
+        parseAttributeValue: false,
+        trimValues: true,
+      });
     }
 
-    return value;
+    return this._xmlParser;
   }
 
-  private escapeXml(value: string): string {
-    return value
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&apos;");
-  }
+  private async getCheerio(): Promise<CheerioAPI> {
+    if (!this._cheerio) {
+      const mod = (await import("cheerio")) as Record<string, unknown>;
 
-  toBuffer(input: any): Buffer {
-    if (Buffer.isBuffer(input)) return input;
-    if (typeof input === "string") return Buffer.from(input, "utf-8");
-    return Buffer.from(JSON.stringify(input), "utf-8");
+      this._cheerio = (mod.default ?? mod) as CheerioAPI;
+    }
+
+    return this._cheerio;
   }
 }
