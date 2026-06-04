@@ -1,47 +1,53 @@
 import type { InternalRequest, ResponseType } from "@hyperttp/types";
+import type { XmlBuilderOptions } from "fast-xml-builder";
 
 export interface ResponseConverterOptions {
   /**
    * @ru Разрешить автоматический парсинг ответов со статус-кодами ошибок (>= 400)
-   * @en Allow automatic parsing of error responses with status codes >= 400
    */
   parseErrors?: boolean;
 
   /**
    * @ru Максимальный размер тела ответа (байты), 0 = без ограничений
-   * @en Maximum response body size (bytes), 0 = unlimited
    */
   maxBodySize?: number;
 
   /**
    * @ru Парсить HTML в DOM структуру
-   * @en Parse HTML into DOM structure
    */
   parseHTML?: boolean;
 
   /**
    * @ru Режим парсинга HTML
-   * @en HTML parsing mode
    */
   htmlMode?: "simple" | "full";
 
   /**
-   * @ru Кодировка текста (ascii|utf8|utf-8|utf16le|ucs2|base64|latin1|binary|hex)
-   * @en Text encoding (ascii|utf8|utf-8|utf16le|ucs2|base64|latin1|binary|hex)
+   * @ru Кодировка текста
    */
   charset?: BufferEncoding;
+
+  /**
+   * @ru Строгие опции для fast-xml-parser (чтение XML)
+   */
+  xmlParserOptions?: Record<string, any>; // Оставляем гибким или импортируем из fast-xml-parser
+
+  /**
+   * @ru Строгие опции для fast-xml-builder (сборка XML)
+   */
+  xmlBuilderOptions?: XmlBuilderOptions;
 }
 
 /**
  * @ru Парсированный ответ сервера
- * @en Parsed server response
  */
 export type ParsedResponse =
   | string
   | Buffer
   | Record<string, any>
   | any[]
-  | null;
+  | null
+  | any;
 
 /**
  * @ru Интерфейс внутреннего запроса, содержащий конфигурацию для `hyperttp-parser`

@@ -18,6 +18,14 @@ declare module "@hyperttp/types" {
 }
 
 /**
+ * Генерирует быстрый детерминированный ключ для кэширования конфигураций парсера.
+ * Предотвращает промахи кэша при передаче инлайновых объектов-литералов.
+ */
+function getOptionsKey(opts: ResponseConverterOptions): string {
+  return `${opts.charset || "u8"}_${opts.maxBodySize || 0}_${opts.parseHTML !== false}_${opts.htmlMode || "d"}_${opts.parseErrors === true}`;
+}
+
+/**
  * @ru Плагин автоматического парсинга и трансформации тела ответа (JSON, Text, Buffer и др.).
  * @en Automatic response body parsing and transformation plugin (JSON, Text, Buffer, etc.).
  */
@@ -29,9 +37,10 @@ export function withParser(
 
   /**
    * @private
-   * @ru Кэш экземпляров конвертера для кастомных локальных опций запроса.
+   * Кэш конвертеров по строковому хэшу их конфигурации.
+   * Защищает горячий путь от создания дубликатов `ResponseConverter`.
    */
-  const converterCache = new WeakMap<object, ResponseConverter>();
+  const converterCache = new Map<string, ResponseConverter>();
 
   return {
     name: "hyperttp-parser",
@@ -54,57 +63,61 @@ export function withParser(
     ): Promise<void> {
       if (!res) return;
 
-      if (res.status === 204 || res.status === 205 || res.status === 304) {
+      const status = res.status;
+      if (status === 204 || status === 205 || status === 304) {
         res.body = null;
         return;
       }
 
-      const parsableReq = req as ParsableRequest;
-      const localOptions = parsableReq.meta?.responseConverter;
+      if (res.body == null) return;
+      if (req && req.method === "HEAD") return;
 
-      const currentOptions = localOptions
-        ? { ...globalOptions, ...localOptions }
-        : globalOptions;
+      const parsableReq = req as ParsableRequest | undefined;
+      const localOptions = parsableReq?.meta?.responseConverter;
 
-      if (
-        req!.method === "HEAD" ||
-        res.body == null ||
-        (!currentOptions.parseErrors && res.status >= 400)
-      ) {
+      const shouldParseErrors =
+        localOptions?.parseErrors ?? globalOptions.parseErrors;
+      if (!shouldParseErrors && status >= 400) {
         return;
       }
 
-      const targetType = parsableReq.meta?.responseType ?? "auto";
+      const targetType = parsableReq?.meta?.responseType ?? "auto";
       if (targetType === "stream") {
         return;
       }
 
       let converter = defaultConverter;
+
       if (localOptions) {
-        const key = localOptions as object;
-        const cached = converterCache.get(key);
+        const cacheKey = getOptionsKey(localOptions);
+        const cached = converterCache.get(cacheKey);
 
         if (cached) {
           converter = cached;
         } else {
-          converter = new ResponseConverter(ctx!.core, currentOptions);
-          converterCache.set(key, converter);
+          const mergedOptions = { ...globalOptions, ...localOptions };
+          converter = new ResponseConverter(ctx!.core, mergedOptions);
+          converterCache.set(cacheKey, converter);
         }
       }
 
       const headers = res.headers;
-      const contentType = headers["content-type"] ?? headers["Content-Type"];
-      const contentEncoding =
-        headers["content-encoding"] ?? headers["Content-Encoding"];
+      let contentType: string | undefined;
+      let contentEncoding: string | undefined;
 
-      const parsed = await converter.convertAsync(res, targetType, {
-        contentType: typeof contentType === "string" ? contentType : undefined,
-        contentEncoding:
-          typeof contentEncoding === "string" ? contentEncoding : undefined,
+      if (headers) {
+        const ct = headers["content-type"] ?? headers["Content-Type"];
+        if (typeof ct === "string") contentType = ct;
+
+        const ce = headers["content-encoding"] ?? headers["Content-Encoding"];
+        if (typeof ce === "string") contentEncoding = ce;
+      }
+
+      res.body = await converter.convertAsync(res, targetType, {
+        contentType,
+        contentEncoding,
         url: res.url,
       });
-
-      res.body = parsed;
     },
   };
 }

@@ -61,6 +61,9 @@ function normalizeContentType(ct?: string): string | undefined {
   return str.trim().toLowerCase();
 }
 
+let cachedNodeBufferFn: ((stream: any) => Promise<Buffer>) | null = null;
+let triedLoadingConsumers = false;
+
 export class ResponseConverter {
   private _xmlParser: XmlParserInstance | null = null;
   private _cheerio: CheerioAPI | null = null;
@@ -91,7 +94,12 @@ export class ResponseConverter {
 
       const buffer = await this.readBody(body);
 
-      return this.convertFromBuffer(buffer, targetType, meta);
+      const finalType =
+        targetType === "auto"
+          ? this.detectSourceType(meta.contentType, meta.url)
+          : targetType;
+
+      return this.convertFromBuffer(buffer, finalType, meta);
     }
 
     const buffer = await this.readBody(source);
@@ -154,24 +162,34 @@ export class ResponseConverter {
     }
 
     const maxBytes = this.options.maxBodySize ?? 0;
+    const isBun = typeof (globalThis as any).Bun !== "undefined";
 
     if (
       typeof globalThis.ReadableStream !== "undefined" &&
       body instanceof globalThis.ReadableStream
     ) {
       if (maxBytes === 0) {
-        if (typeof (globalThis as any).Bun !== "undefined") {
+        if (isBun) {
           return Buffer.from(
             await (globalThis as any).Bun.readableStreamToBytes(body),
           );
         }
-        if (typeof globalThis.Response !== "undefined") {
-          const ab = await new globalThis.Response(body).arrayBuffer();
-          return Buffer.from(ab);
+
+        if (!cachedNodeBufferFn && !triedLoadingConsumers) {
+          triedLoadingConsumers = true;
+          try {
+            const { buffer } = await import("node:stream/consumers");
+            cachedNodeBufferFn = buffer;
+          } catch {
+            //
+          }
+        }
+
+        if (cachedNodeBufferFn) {
+          return await cachedNodeBufferFn(body);
         }
       }
 
-      // 🐢 SLOW PATH: Почаночный обход стрима для строгого контроля лимита maxBodySize
       const reader = body.getReader();
       const chunks: Uint8Array[] = [];
       let received = 0;
@@ -185,7 +203,13 @@ export class ResponseConverter {
           }
           chunks.push(value);
         }
-        return received === 0 ? EMPTY_BUFFER : Buffer.concat(chunks, received);
+        if (received === 0) return EMPTY_BUFFER;
+
+        if (chunks.length === 1) {
+          const first = chunks[0];
+          return Buffer.isBuffer(first) ? first : Buffer.from(first);
+        }
+        return Buffer.concat(chunks, received);
       } finally {
         reader.releaseLock();
       }
@@ -207,7 +231,7 @@ export class ResponseConverter {
         }
         if (chunk instanceof Uint8Array) {
           total += chunk.byteLength;
-          return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+          return Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         }
         const str = typeof chunk === "string" ? chunk : String(chunk);
         const len = Buffer.byteLength(str);
@@ -228,18 +252,22 @@ export class ResponseConverter {
     return Buffer.from(JSON.stringify(body), "utf-8");
   }
 
-  public async convertFromBuffer(
+  public convertFromBuffer(
     body: Buffer,
     targetType: ResponseType,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _meta: ConversionMeta = {},
-  ): Promise<ParsedResponse> {
+  ): ParsedResponse | Promise<ParsedResponse> {
     if (targetType === "buffer") return body;
 
-    const text = body.toString(this.options.charset ?? "utf-8");
+    let finalType: ResponseType = targetType;
+    if (finalType === "auto") {
+      finalType = this.guessTypeFromBuffer(body) as ResponseType;
+    }
 
-    const finalType =
-      targetType === "auto" ? this.guessTypeFromText(text) : targetType;
+    if (finalType === "buffer") return body;
+
+    const text = body.toString(this.options.charset ?? "utf-8");
 
     switch (finalType) {
       case "json":
@@ -251,10 +279,10 @@ export class ResponseConverter {
       case "html":
         return this.htmlToJson(text);
 
-      case "xml": {
-        const parser = await this.getXmlParser();
-        return parser.parse(text) as ParsedResponse;
-      }
+      case "xml":
+        return this.getXmlParser().then(
+          (parser) => parser.parse(text) as ParsedResponse,
+        );
 
       default:
         return text;
@@ -306,17 +334,35 @@ export class ResponseConverter {
     return "auto";
   }
 
-  private guessTypeFromText(text: string): InternalTargetType {
-    if (!text) return "text";
+  private guessTypeFromBuffer(body: Buffer): InternalTargetType {
+    const len = body.length;
+    if (len === 0) return "text";
 
-    const trimmed = text.trimStart();
+    let start = 0;
+    while (start < len) {
+      const ch = body[start];
+      // Fast Whitespace Skip (JIT-optimized)
+      if (ch === 32 || ch === 9 || ch === 10 || ch === 13) {
+        start++;
+      } else {
+        break;
+      }
+    }
 
-    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    if (start >= len) return "text";
+    const firstByte = body[start];
+
+    // '{' '[' -> JSON
+    if (firstByte === 123 || firstByte === 91) {
       return "json";
     }
 
-    if (trimmed.startsWith("<")) {
-      if (trimmed.toLowerCase().includes("<html")) return "html";
+    // '<'
+    if (firstByte === 60) {
+      if (len - start >= 5) {
+        const slice = body.toString("utf-8", start, start + 5).toLowerCase();
+        if (slice === "<html" || slice === "<!doc") return "html";
+      }
       return "xml";
     }
 
@@ -382,12 +428,24 @@ export class ResponseConverter {
     try {
       return JSON.parse(text);
     } catch {
-      const match = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-      if (match) {
-        try {
-          return JSON.parse(match[0]);
-        } catch {
-          //
+      const firstBrace = text.indexOf("{");
+      const firstBracket = text.indexOf("[");
+      const start =
+        firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)
+          ? firstBrace
+          : firstBracket;
+
+      if (start !== -1) {
+        const lastBrace = text.lastIndexOf("}");
+        const lastBracket = text.lastIndexOf("]");
+        const end = lastBrace > lastBracket ? lastBrace : lastBracket;
+
+        if (end > start) {
+          try {
+            return JSON.parse(text.slice(start, end + 1));
+          } catch {
+            //
+          }
         }
       }
 
@@ -429,20 +487,19 @@ export class ResponseConverter {
     );
   }
 
-  private async readNodeStream(
-    emitter: NodeStreamLike,
-    max: number,
-  ): Promise<Buffer> {
+  private readNodeStream(stream: any, max: number): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const chunks: Uint8Array[] = [];
       let received = 0;
 
-      const onData = (chunk: unknown) => {
+      const onData = (chunk: any) => {
         let buf: Uint8Array;
         if (chunk instanceof Uint8Array) {
           buf = chunk;
         } else if (typeof chunk === "string") {
           buf = Buffer.from(chunk, "utf-8");
+        } else if (chunk && typeof chunk === "object") {
+          buf = Buffer.from(JSON.stringify(chunk), "utf-8");
         } else {
           buf = Buffer.from(String(chunk), "utf-8");
         }
@@ -451,11 +508,8 @@ export class ResponseConverter {
 
         if (max > 0 && received > max) {
           cleanup();
-          if (
-            "destroy" in emitter &&
-            typeof (emitter as Destroyable).destroy === "function"
-          ) {
-            (emitter as Destroyable).destroy();
+          if (typeof stream.destroy === "function") {
+            stream.destroy();
           }
           reject(new Error(`Response size limit exceeded (${max} bytes)`));
           return;
@@ -465,25 +519,33 @@ export class ResponseConverter {
 
       const onEnd = () => {
         cleanup();
-        resolve(
-          received === 0 ? EMPTY_BUFFER : Buffer.concat(chunks, received),
-        );
+        if (received === 0) {
+          resolve(EMPTY_BUFFER);
+          return;
+        }
+
+        if (chunks.length === 1) {
+          const first = chunks[0];
+          resolve(Buffer.isBuffer(first) ? first : Buffer.from(first));
+          return;
+        }
+        resolve(Buffer.concat(chunks, received));
       };
 
-      const onError = (err: unknown) => {
+      const onError = (err: any) => {
         cleanup();
         reject(err);
       };
 
-      function cleanup() {
-        emitter.off("data", onData);
-        emitter.off("end", onEnd);
-        emitter.off("error", onError);
-      }
+      const cleanup = () => {
+        stream.off("data", onData);
+        stream.off("end", onEnd);
+        stream.off("error", onError);
+      };
 
-      emitter.on("data", onData);
-      emitter.on("end", onEnd);
-      emitter.on("error", onError);
+      stream.on("data", onData);
+      stream.on("end", onEnd);
+      stream.on("error", onError);
     });
   }
 
@@ -500,6 +562,8 @@ export class ResponseConverter {
         buf = chunk;
       } else if (typeof chunk === "string") {
         buf = Buffer.from(chunk, "utf-8");
+      } else if (chunk && typeof chunk === "object") {
+        buf = Buffer.from(JSON.stringify(chunk), "utf-8");
       } else {
         buf = Buffer.from(String(chunk), "utf-8");
       }
@@ -518,7 +582,12 @@ export class ResponseConverter {
       chunks.push(buf);
     }
 
-    return chunks.length === 0 ? EMPTY_BUFFER : Buffer.concat(chunks, received);
+    if (received === 0) return EMPTY_BUFFER;
+    if (chunks.length === 1) {
+      const first = chunks[0];
+      return Buffer.isBuffer(first) ? first : Buffer.from(first);
+    }
+    return Buffer.concat(chunks, received);
   }
 
   private async getXmlParser(): Promise<XmlParserInstance> {
