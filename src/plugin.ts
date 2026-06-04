@@ -20,8 +20,6 @@ declare module "@hyperttp/types" {
 /**
  * @ru Плагин автоматического парсинга и трансформации тела ответа (JSON, Text, Buffer и др.).
  * @en Automatic response body parsing and transformation plugin (JSON, Text, Buffer, etc.).
- * @param pluginOptions - Custom options to override global configuration.
- * @returns HyperPlugin object instance.
  */
 export function withParser(
   pluginOptions?: Partial<ResponseConverterOptions>,
@@ -32,20 +30,16 @@ export function withParser(
   /**
    * @private
    * @ru Кэш экземпляров конвертера для кастомных локальных опций запроса.
-   * @en Converter instances cache for custom local request options.
    */
   const converterCache = new WeakMap<object, ResponseConverter>();
 
   return {
     name: "hyperttp-parser",
-
     phase: "FORMAT",
 
-    /**
-     * @ru Хук инициализации. Настраивает глобальные опции и связывает конвертер с ядром.
-     */
     setup(ctx: PluginContext): void {
       globalOptions = {
+        parseErrors: false,
         ...ctx.config.responseConverter,
         ...pluginOptions,
       };
@@ -53,33 +47,39 @@ export function withParser(
       defaultConverter = new ResponseConverter(ctx.core, globalOptions);
     },
 
-    /**
-     * @ru Перехватчик фазы успешного ответа. Выполняет асинхронную конвертацию.
-     */
     async onResponse(
       res: HttpResponse<any>,
       req?: InternalRequest,
       ctx?: PluginContext,
     ): Promise<void> {
-      if (
-        !res ||
-        req!.method === "HEAD" ||
-        res.status >= 400 ||
-        res.body == null
-      ) {
+      if (!res) return;
+
+      if (res.status === 204 || res.status === 205 || res.status === 304) {
+        res.body = null;
         return;
       }
 
       const parsableReq = req as ParsableRequest;
-      const targetType = parsableReq.meta?.responseType ?? "auto";
+      const localOptions = parsableReq.meta?.responseConverter;
 
+      const currentOptions = localOptions
+        ? { ...globalOptions, ...localOptions }
+        : globalOptions;
+
+      if (
+        req!.method === "HEAD" ||
+        res.body == null ||
+        (!currentOptions.parseErrors && res.status >= 400)
+      ) {
+        return;
+      }
+
+      const targetType = parsableReq.meta?.responseType ?? "auto";
       if (targetType === "stream") {
         return;
       }
 
-      const localOptions = parsableReq.meta?.responseConverter;
       let converter = defaultConverter;
-
       if (localOptions) {
         const key = localOptions as object;
         const cached = converterCache.get(key);
@@ -87,11 +87,7 @@ export function withParser(
         if (cached) {
           converter = cached;
         } else {
-          converter = new ResponseConverter(ctx!.core, {
-            ...globalOptions,
-            ...localOptions,
-          });
-
+          converter = new ResponseConverter(ctx!.core, currentOptions);
           converterCache.set(key, converter);
         }
       }
@@ -108,7 +104,6 @@ export function withParser(
         url: res.url,
       });
 
-      // Перезаписываем body результатом нативного парсинга
       res.body = parsed;
     },
   };

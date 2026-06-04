@@ -1,6 +1,6 @@
 {
   "name": "@hyperttp/parser",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "Automated response parsing and content conversion plugin for Hyperttp client",
   "type": "module",
   "main": "./dist/index.js",
@@ -26,12 +26,12 @@
     "url": "git+https://github.com/IT-IF-OR/hyperttp-parser.git"
   },
   "peerDependencies": {
-    "@hyperttp/types": "^0.1.5"
+    "@hyperttp/types": "^0.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "globals": "^17.6.0",
-    "typescript-eslint": "^8.60.0",
+    "typescript-eslint": "^8.60.1",
     "@types/bun": "latest",
     "@types/node": "latest",
     "typescript": "^6.0.3",
