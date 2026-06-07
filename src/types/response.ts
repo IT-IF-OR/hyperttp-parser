@@ -1,41 +1,12 @@
 import type { InternalRequest, ResponseType } from "@hyperttp/types";
-import type { XmlBuilderOptions } from "fast-xml-builder";
 
 export interface ResponseConverterOptions {
-  /**
-   * @ru Разрешить автоматический парсинг ответов со статус-кодами ошибок (>= 400)
-   */
-  parseErrors?: boolean;
-
-  /**
-   * @ru Максимальный размер тела ответа (байты), 0 = без ограничений
-   */
-  maxBodySize?: number;
-
-  /**
-   * @ru Парсить HTML в DOM структуру
-   */
-  parseHTML?: boolean;
-
-  /**
-   * @ru Режим парсинга HTML
-   */
-  htmlMode?: "simple" | "full";
-
-  /**
-   * @ru Кодировка текста
-   */
   charset?: BufferEncoding;
-
-  /**
-   * @ru Строгие опции для fast-xml-parser (чтение XML)
-   */
-  xmlParserOptions?: Record<string, any>; // Оставляем гибким или импортируем из fast-xml-parser
-
-  /**
-   * @ru Строгие опции для fast-xml-builder (сборка XML)
-   */
-  xmlBuilderOptions?: XmlBuilderOptions;
+  maxBodySize?: number;
+  parseHTML?: boolean;
+  htmlMode?: "simple" | "full";
+  xmlParserOptions?: Record<string, unknown>;
+  parseErrors?: boolean;
 }
 
 /**
@@ -71,6 +42,14 @@ export interface ParsableRequest extends InternalRequest {
      * @ru Сигнатура для поддержки остальных мета-полей других плагинов ядра
      * @en Index signature to support other meta fields from core plugins
      */
+    [key: string]: any;
+  };
+}
+
+export interface ParsableRequest extends InternalRequest {
+  meta?: {
+    responseConverter?: ResponseConverterOptions;
+    responseType?: ResponseType;
     [key: string]: any;
   };
 }
