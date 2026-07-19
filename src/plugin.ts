@@ -1,4 +1,4 @@
-import { HyperPlugin, PluginContext } from "@hyperttp/types";
+import type { HyperPlugin, PluginContext } from "@hyperttp/types";
 import { ResponseConverter } from "./utils/ResponseConverter.js";
 import type { ResponseConverterOptions } from "./types/response.js";
 import { normalizeHeaders } from "./utils/helpers.js";
@@ -21,9 +21,7 @@ function fastKey(opts?: Partial<ResponseConverterOptions>): string {
   ].join("|");
 }
 
-export function withParser(
-  pluginOptions: Partial<ResponseConverterOptions> = {},
-): HyperPlugin {
+export function withParser(pluginOptions: Partial<ResponseConverterOptions> = {}): HyperPlugin {
   let globalOptions!: ResponseConverterOptions;
   let defaultConverter!: ResponseConverter;
 

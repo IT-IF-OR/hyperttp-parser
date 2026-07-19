@@ -12,13 +12,7 @@ export interface ResponseConverterOptions {
 /**
  * @ru Парсированный ответ сервера
  */
-export type ParsedResponse =
-  | string
-  | Buffer
-  | Record<string, any>
-  | any[]
-  | null
-  | any;
+export type ParsedResponse = string | Buffer | Record<string, any> | any[] | null | any;
 
 /**
  * @ru Интерфейс внутреннего запроса, содержащий конфигурацию для `hyperttp-parser`

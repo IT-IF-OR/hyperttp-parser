@@ -61,17 +61,10 @@ function hasNodeStreamAPI(v: unknown): v is {
   destroy?: () => void;
   removeListener?: (event: string, cb: (...args: any[]) => void) => void;
 } {
-  return (
-    v != null &&
-    typeof v === "object" &&
-    "on" in v &&
-    typeof (v as any).on === "function"
-  );
+  return v != null && typeof v === "object" && "on" in v && typeof (v as any).on === "function";
 }
 
-function isPlainJsonValue(
-  v: unknown,
-): v is Record<string, unknown> | unknown[] {
+function isPlainJsonValue(v: unknown): v is Record<string, unknown> | unknown[] {
   if (Array.isArray(v)) return true;
   if (!v || typeof v !== "object") return false;
 
@@ -94,10 +87,10 @@ export class ResponseConverter {
   private readonly decoder: TextDecoder;
   private readonly isBun = typeof (globalThis as any).Bun !== "undefined";
 
-  private _xmlParser: any = null;
-  private _xmlPromise: Promise<any> | null = null;
-  private _cheerio: any = null;
-  private _cheerioPromise: Promise<any> | null = null;
+  private _xmlParser: { parse(text: string): unknown } | null = null;
+  private _xmlPromise: Promise<{ parse(text: string): unknown }> | null = null;
+  private _htmlParser: ((html: string) => any) | null = null;
+  private _htmlParserPromise: Promise<(html: string) => any> | null = null;
 
   constructor(options: ResponseConverterOptions = {}) {
     this.options = options;
@@ -121,19 +114,11 @@ export class ResponseConverter {
         return source.body as ParsedResponse;
       }
 
-      const type =
-        targetType === "auto"
-          ? this.detect(meta.contentType, meta.url)
-          : targetType;
-
+      const type = targetType === "auto" ? this.detect(meta.contentType, meta.url) : targetType;
       return this.convertBody(source.body, type, meta);
     }
 
-    const type =
-      targetType === "auto"
-        ? this.detect(meta.contentType, meta.url)
-        : targetType;
-
+    const type = targetType === "auto" ? this.detect(meta.contentType, meta.url) : targetType;
     return this.convertBody(source, type, meta);
   }
 
@@ -143,34 +128,11 @@ export class ResponseConverter {
     meta: ConversionMeta,
   ): Promise<ParsedResponse> {
     if (body == null) return null;
-    return this.isBun
-      ? this.convertBun(body, type, meta)
-      : this.convertNode(body, type, meta);
-  }
 
-  private async convertBun(
-    body: unknown,
-    type: ResponseType,
-    meta: ConversionMeta,
-  ): Promise<ParsedResponse> {
     const native = await this.tryNative(body, type);
     if (native !== MISS) return native;
 
-    const fast = await this.fastBun(body, type, meta);
-    if (fast !== MISS) return fast;
-
-    return this.slow(body, type);
-  }
-
-  private async convertNode(
-    body: unknown,
-    type: ResponseType,
-    meta: ConversionMeta,
-  ): Promise<ParsedResponse> {
-    const native = await this.tryNative(body, type);
-    if (native !== MISS) return native;
-
-    const fast = await this.fastNode(body, type, meta);
+    const fast = await this.fast(body, type, meta);
     if (fast !== MISS) return fast;
 
     return this.slow(body, type);
@@ -184,19 +146,12 @@ export class ResponseConverter {
 
     const b = body as NativeBodyLike;
 
-    if (type === "json" && typeof b.json === "function") {
-      return await b.json();
-    }
-
-    if (type === "text" && typeof b.text === "function") {
-      return await b.text();
-    }
-
+    if (type === "json" && typeof b.json === "function") return await b.json();
+    if (type === "text" && typeof b.text === "function") return await b.text();
     if (type === "buffer" && typeof b.bytes === "function") {
       const bytes = await b.bytes();
       return bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
     }
-
     if (type === "buffer" && typeof b.arrayBuffer === "function") {
       return new Uint8Array(await b.arrayBuffer());
     }
@@ -204,292 +159,84 @@ export class ResponseConverter {
     return MISS;
   }
 
-  private async fastBun(
+  private async bodyToBytes(body: unknown): Promise<Uint8Array | typeof MISS> {
+    if (isUint8ArrayLike(body)) return body;
+    if (isArrayBufferLike(body)) return new Uint8Array(body);
+    if (isBufferLike(body)) return body;
+    if (isBlobLike(body)) return new Uint8Array(await body.arrayBuffer());
+    if (isReadableStreamLike(body)) return await this.readReadableStream(body);
+    if (hasAsyncIterator(body)) return await this.readAsyncIterable(body);
+    if (hasNodeStreamAPI(body)) return await this.readNodeStream(body);
+    return MISS;
+  }
+
+  private async fast(
     body: unknown,
     type: ResponseType,
     meta: ConversionMeta,
   ): Promise<ParsedResponse | typeof MISS> {
-    const ct = normalizeCT(meta.contentType);
-
     if (type === "buffer") {
-      if (isUint8ArrayLike(body)) return body;
-      if (isArrayBufferLike(body)) return new Uint8Array(body);
-      if (isBufferLike(body)) return body;
-      if (isBlobLike(body)) return new Uint8Array(await body.arrayBuffer());
-      if (isReadableStreamLike(body))
-        return await this.readReadableStream(body);
-      if (hasAsyncIterator(body)) return await this.readAsyncIterable(body);
-      if (hasNodeStreamAPI(body)) return await this.readNodeStream(body);
-      return MISS;
+      if (this.isBun) {
+        return this.bodyToBytes(body);
+      } else {
+        if (isBufferLike(body)) return body;
+        const bytes = await this.bodyToBytes(body);
+        return bytes !== MISS ? Buffer.from(bytes) : MISS;
+      }
     }
 
     if (type === "text") {
       if (typeof body === "string") return body;
-      if (isUint8ArrayLike(body)) return this.decoder.decode(body);
-      if (isArrayBufferLike(body))
-        return this.decoder.decode(new Uint8Array(body));
-      if (isBufferLike(body)) return this.decoder.decode(body);
-      if (isBlobLike(body))
-        return this.decoder.decode(new Uint8Array(await body.arrayBuffer()));
-      if (isReadableStreamLike(body))
-        return this.decoder.decode(await this.readReadableStream(body));
-      if (hasAsyncIterator(body))
-        return this.decoder.decode(await this.readAsyncIterable(body));
-      if (hasNodeStreamAPI(body))
-        return this.decoder.decode(await this.readNodeStream(body));
-      return MISS;
+      const bytes = await this.bodyToBytes(body);
+      return bytes !== MISS ? this.bytesToText(bytes) : MISS;
     }
 
-    const isJson =
-      type === "json" || ct === "application/json" || ct?.endsWith("+json");
-
+    const ct = normalizeCT(meta.contentType);
+    const isJson = type === "json" || ct === "application/json" || ct?.endsWith("+json");
     if (isJson) {
-      if (isPlainJsonValue(body)) return body;
-
-      if (typeof body === "string") {
-        try {
-          return JSON.parse(body);
-        } catch {
-          return this.safeJsonParseFallback(body);
-        }
-      }
-
-      if (isUint8ArrayLike(body)) {
-        const text = this.decoder.decode(body);
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (isArrayBufferLike(body)) {
-        const text = this.decoder.decode(new Uint8Array(body));
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (isBufferLike(body)) {
-        const text = this.decoder.decode(body);
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (isBlobLike(body)) {
-        const text = this.decoder.decode(
-          new Uint8Array(await body.arrayBuffer()),
-        );
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (isReadableStreamLike(body)) {
-        const bytes = await this.readReadableStream(body);
-        const text = this.decoder.decode(bytes);
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (hasAsyncIterator(body)) {
-        const bytes = await this.readAsyncIterable(body);
-        const text = this.decoder.decode(bytes);
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (hasNodeStreamAPI(body)) {
-        const bytes = await this.readNodeStream(body);
-        const text = this.decoder.decode(bytes);
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
+      return this.resolveJsonBody(body);
     }
 
     return MISS;
   }
 
-  private async fastNode(
-    body: unknown,
-    type: ResponseType,
-    meta: ConversionMeta,
-  ): Promise<ParsedResponse | typeof MISS> {
-    const ct = normalizeCT(meta.contentType);
-    const enc = this.charset;
-
-    if (type === "buffer") {
-      if (isBufferLike(body)) return body;
-      if (isUint8ArrayLike(body)) return Buffer.from(body);
-      if (isArrayBufferLike(body)) return Buffer.from(new Uint8Array(body));
-      if (isBlobLike(body))
-        return Buffer.from(new Uint8Array(await body.arrayBuffer()));
-      if (isReadableStreamLike(body))
-        return Buffer.from(await this.readReadableStream(body));
-      if (hasAsyncIterator(body))
-        return Buffer.from(await this.readAsyncIterable(body));
-      if (hasNodeStreamAPI(body))
-        return Buffer.from(await this.readNodeStream(body));
-      return MISS;
-    }
-
-    if (type === "text") {
-      if (typeof body === "string") return body;
-      if (isBufferLike(body)) return body.toString(enc as BufferEncoding);
-      if (isUint8ArrayLike(body))
-        return Buffer.from(body).toString(enc as BufferEncoding);
-      if (isArrayBufferLike(body))
-        return Buffer.from(new Uint8Array(body)).toString(
-          enc as BufferEncoding,
-        );
-      if (isBlobLike(body))
-        return Buffer.from(await body.arrayBuffer()).toString(
-          enc as BufferEncoding,
-        );
-      if (isReadableStreamLike(body))
-        return Buffer.from(await this.readReadableStream(body)).toString(
-          enc as BufferEncoding,
-        );
-      if (hasAsyncIterator(body))
-        return Buffer.from(await this.readAsyncIterable(body)).toString(
-          enc as BufferEncoding,
-        );
-      if (hasNodeStreamAPI(body))
-        return Buffer.from(await this.readNodeStream(body)).toString(
-          enc as BufferEncoding,
-        );
-      return MISS;
-    }
-
-    const isJson =
-      type === "json" || ct === "application/json" || ct?.endsWith("+json");
-
-    if (isJson) {
-      if (isPlainJsonValue(body)) return body;
-
-      if (typeof body === "string") {
-        try {
-          return JSON.parse(body);
-        } catch {
-          return this.safeJsonParseFallback(body);
-        }
-      }
-
-      if (isBufferLike(body)) {
-        const text = body.toString(enc as BufferEncoding);
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (isUint8ArrayLike(body)) {
-        const text = Buffer.from(body).toString(enc as BufferEncoding);
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (isArrayBufferLike(body)) {
-        const text = Buffer.from(new Uint8Array(body)).toString(
-          enc as BufferEncoding,
-        );
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (isBlobLike(body)) {
-        const text = Buffer.from(await body.arrayBuffer()).toString(
-          enc as BufferEncoding,
-        );
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (isReadableStreamLike(body)) {
-        const text = Buffer.from(await this.readReadableStream(body)).toString(
-          enc as BufferEncoding,
-        );
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (hasAsyncIterator(body)) {
-        const text = Buffer.from(await this.readAsyncIterable(body)).toString(
-          enc as BufferEncoding,
-        );
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-
-      if (hasNodeStreamAPI(body)) {
-        const text = Buffer.from(await this.readNodeStream(body)).toString(
-          enc as BufferEncoding,
-        );
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
-      }
-    }
-
-    return MISS;
+  private bytesToText(bytes: Uint8Array): string {
+    return this.isBun
+      ? this.decoder.decode(bytes)
+      : Buffer.from(bytes).toString(this.charset as BufferEncoding);
   }
 
-  private async slow(
-    body: unknown,
-    type: ResponseType,
-  ): Promise<ParsedResponse> {
+  private tryParseJson(text: string): ParsedResponse {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return this.safeJsonParseFallback(text);
+    }
+  }
+
+  private async resolveJsonBody(body: unknown): Promise<ParsedResponse | typeof MISS> {
+    if (isPlainJsonValue(body)) return body;
+    if (typeof body === "string") return this.tryParseJson(body);
+
+    const bytes = await this.bodyToBytes(body);
+    return bytes !== MISS ? this.tryParseJson(this.bytesToText(bytes)) : MISS;
+  }
+
+  private async slow(body: unknown, type: ResponseType): Promise<ParsedResponse> {
     const text = await this.toText(body);
     if (text.length === 0) return null;
 
     switch (type) {
       case "buffer":
         return this.isBun
-          ? this.decoder.decode(new TextEncoder().encode(text))
+          ? new TextEncoder().encode(text)
           : Buffer.from(text, this.charset as BufferEncoding);
 
       case "text":
         return text;
 
       case "json":
-        try {
-          return JSON.parse(text);
-        } catch {
-          return this.safeJsonParseFallback(text);
-        }
+        return this.tryParseJson(text);
 
       case "html":
         return this.htmlToJson(text);
@@ -507,59 +254,27 @@ export class ResponseConverter {
   private async toText(body: unknown): Promise<string> {
     if (typeof body === "string") return body;
 
-    if (isBufferLike(body)) {
-      return this.isBun
-        ? this.decoder.decode(body)
-        : body.toString(this.charset as BufferEncoding);
-    }
-
-    if (isUint8ArrayLike(body)) {
-      return this.decoder.decode(body);
-    }
-
-    if (isArrayBufferLike(body)) {
-      return this.decoder.decode(new Uint8Array(body));
-    }
-
-    if (isBlobLike(body)) {
-      return this.decoder.decode(new Uint8Array(await body.arrayBuffer()));
-    }
-
-    if (isReadableStreamLike(body)) {
-      return this.decoder.decode(await this.readReadableStream(body));
-    }
-
-    if (hasAsyncIterator(body)) {
-      return this.decoder.decode(await this.readAsyncIterable(body));
-    }
-
-    if (hasNodeStreamAPI(body)) {
-      return this.decoder.decode(await this.readNodeStream(body));
-    }
+    const bytes = await this.bodyToBytes(body);
+    if (bytes !== MISS) return this.bytesToText(bytes);
 
     const native = body as NativeBodyLike;
-
-    if (typeof native.text === "function") {
-      return await native.text();
-    }
-
+    if (typeof native.text === "function") return await native.text();
     if (typeof native.bytes === "function") {
-      const bytes = await native.bytes();
-      return this.decoder.decode(
-        bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes,
-      );
+      const b = await native.bytes();
+      return this.bytesToText(b instanceof ArrayBuffer ? new Uint8Array(b) : b);
     }
-
     if (typeof native.arrayBuffer === "function") {
-      return this.decoder.decode(new Uint8Array(await native.arrayBuffer()));
+      return this.bytesToText(new Uint8Array(await native.arrayBuffer()));
     }
 
     return String(body);
   }
 
-  private async readReadableStream(
-    stream: ReadableStream<Uint8Array>,
-  ): Promise<Uint8Array> {
+  private async readReadableStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+    if (this.isBun) {
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+
     const reader = stream.getReader();
     const chunks: Uint8Array[] = [];
     let total = 0;
@@ -578,22 +293,18 @@ export class ResponseConverter {
     }
 
     if (chunks.length === 0) return new Uint8Array(0);
-    if (chunks.length === 1) return chunks[0];
+    if (chunks.length === 1) return chunks[0]!;
 
     const out = new Uint8Array(total);
     let offset = 0;
-
     for (const chunk of chunks) {
       out.set(chunk, offset);
       offset += chunk.byteLength;
     }
-
     return out;
   }
 
-  private async readAsyncIterable(
-    iterable: AsyncIterable<unknown>,
-  ): Promise<Uint8Array> {
+  private async readAsyncIterable(iterable: AsyncIterable<unknown>): Promise<Uint8Array> {
     const chunks: Uint8Array[] = [];
     let total = 0;
 
@@ -605,7 +316,7 @@ export class ResponseConverter {
     }
 
     if (chunks.length === 0) return new Uint8Array(0);
-    if (chunks.length === 1) return chunks[0];
+    if (chunks.length === 1) return chunks[0]!;
 
     const out = new Uint8Array(total);
     let offset = 0;
@@ -639,7 +350,7 @@ export class ResponseConverter {
         }
 
         if (chunks.length === 1) {
-          resolve(chunks[0]);
+          resolve(chunks[0]!);
           return;
         }
 
@@ -682,8 +393,7 @@ export class ResponseConverter {
     if (isUint8ArrayLike(chunk)) return chunk;
     if (isArrayBufferLike(chunk)) return new Uint8Array(chunk);
     if (typeof chunk === "string") return new TextEncoder().encode(chunk);
-    if (typeof chunk === "object")
-      return new TextEncoder().encode(JSON.stringify(chunk));
+    if (typeof chunk === "object") return new TextEncoder().encode(JSON.stringify(chunk));
     return new TextEncoder().encode(String(chunk));
   }
 
@@ -764,49 +474,52 @@ export class ResponseConverter {
   private async htmlToJson(html: string): Promise<ParsedResponse> {
     if (this.options.parseHTML === false) return html;
 
-    const cheerio = await this.getCheerio();
-    const $ = cheerio.load(html);
+    const parse = await this.getHtmlParser();
+    const root = parse(html);
 
     if (this.options.htmlMode === "simple") {
       return {
-        title: $("title").text(),
-        text: $("body").text().trim(),
+        title: root.querySelector("title")?.textContent ?? "",
+        text: root.querySelector("body")?.textContent?.trim() ?? "",
       };
     }
 
+    const titleEl = root.querySelector("title");
+    const metaEls = root.querySelectorAll("meta");
+    const bodyEl = root.querySelector("body");
+
     const result = {
-      title: $("title").text() || undefined,
+      title: titleEl?.textContent || undefined,
       meta: {} as Record<string, string>,
-      body: { text: $("body").text().trim() } as Record<string, unknown>,
+      body: {
+        text: bodyEl?.textContent?.trim() ?? "",
+      } as Record<string, unknown>,
     };
 
-    $("meta").each((_: any, el: any) => {
-      const attr = el.attribs;
-      if (!attr) return;
-
-      const name = attr.name || attr.property || attr.charset;
-      const content = attr.content || attr.value || "";
-
+    for (const el of metaEls) {
+      const name =
+        el.getAttribute("name") || el.getAttribute("property") || el.getAttribute("charset");
+      const content = el.getAttribute("content") || el.getAttribute("value") || "";
       if (name) result.meta[name] = content;
-    });
+    }
 
-    $("body")
-      .children()
-      .each((_: any, el: any) => {
-        const tag = el.name || el.tagName;
-        if (!tag) return;
+    if (bodyEl) {
+      for (const child of bodyEl.childNodes) {
+        const tag = (child as any).tagName;
+        if (!tag) continue;
 
-        const text = $(el).text().trim();
-        if (!text) return;
+        const text = (child as any).textContent?.trim();
+        if (!text) continue;
 
         const bodyTarget = result.body as Record<string, string[]>;
         (bodyTarget[tag] ??= []).push(text);
-      });
+      }
+    }
 
     return result as ParsedResponse;
   }
 
-  private async getXmlParser(): Promise<any> {
+  private async getXmlParser(): Promise<{ parse(text: string): unknown }> {
     if (this._xmlParser) return Promise.resolve(this._xmlParser);
     if (!this._xmlPromise) {
       this._xmlPromise = import("fast-xml-parser").then(({ XMLParser }) => {
@@ -824,15 +537,14 @@ export class ResponseConverter {
     return this._xmlPromise;
   }
 
-  private async getCheerio(): Promise<any> {
-    if (this._cheerio) return Promise.resolve(this._cheerio);
-    if (!this._cheerioPromise) {
-      this._cheerioPromise = import("cheerio").then((mod) => {
-        const loaded = (mod as any).load ? mod : ((mod as any).default ?? mod);
-        this._cheerio = loaded;
-        return this._cheerio;
+  private async getHtmlParser(): Promise<(html: string) => any> {
+    if (this._htmlParser) return Promise.resolve(this._htmlParser);
+    if (!this._htmlParserPromise) {
+      this._htmlParserPromise = import("node-html-parser").then((mod) => {
+        this._htmlParser = ((mod as any).parse ?? mod) as (html: string) => any;
+        return this._htmlParser!;
       });
     }
-    return this._cheerioPromise;
+    return this._htmlParserPromise;
   }
 }
