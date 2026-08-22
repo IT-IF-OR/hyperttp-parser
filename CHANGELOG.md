@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.0] - 2026-08-22
+
+### Added
+
+- Added protocol-neutral callbacks: `shouldParse`, `getData`, `getResponseType`, and `isEmptyResponse`. Each callback may be synchronous or asynchronous and receives the response, request, and request context.
+- Added `bodyExtractor` as an alias for `getData` and `detectResponseType` as an alias for `getResponseType`.
+- Exported parser-owned response, conversion metadata, callback, request-context, and response-type types.
+- Added explicit REST defaults for `HEAD` and empty `204`, `205`, and `304` responses.
+
+### Changed
+
+- **Breaking:** Migrated to the `@hyperttp/types` 0.3 universal API: responses use `data`, protocol requests use `input`, and per-request values use `metadata`.
+- **Breaking:** Response conversion no longer mutates the incoming response; the plugin returns a new `UniversalResponse` when `data` changes.
+- **Breaking:** Moved client option augmentation to `HyperClientOptions` and updated the `@hyperttp/types` peer dependency to `^0.3.0`.
+- Restricted default HTTP empty-response behavior to the REST protocol. Other protocols can define equivalent behavior through callbacks.
+- Request settings are resolved from `RequestContext.meta` and `SendRequest.metadata`, with request metadata taking precedence.
+- Explicit response types now take precedence over `Content-Type`.
+
+### Fixed
+
+- Preserved already-converted JSON objects, arrays, numbers, and booleans instead of converting them again.
+- Preserved JSON objects containing transport-like fields such as `raw`, `body`, `headers`, or `status` when processed through the plugin.
+- Fixed JSON fast-path handling for numeric and boolean values.
+- Avoided reading response headers when the response type is explicit or data is already converted.
+
+### Performance
+
+- Added pass-through fast paths for already-converted values, avoiding redundant header lookup, response-type detection, conversion, and response allocation.
+- Automatic conversion metadata now reads only `Content-Type` and is created only for `responseType: "auto"`.
+- Removed repeated content-type normalization from the conversion fast path.
+
+### Migration
+
+- Replace response access through `body` with `data`.
+- Replace HTTP-specific request fields with protocol-specific `SendRequest.input`.
+- Move per-request `responseType` and `responseConverter` values from legacy `meta` fields to `metadata`.
+- Register `withParser()` explicitly when the plugin is not supplied by the `hyperttp` package.
+
 ## [1.2.0] - 2026-07-19
 
 ### Changed

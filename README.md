@@ -1,108 +1,91 @@
 # @hyperttp/parser
 
-Официальный плагин автоматического парсинга и
-конвертации ответов для HTTP-клиента **Hyperttp**.
-Работает на фазе `FORMAT`, вычитывает входящий поток данных (body stream) и
-преобразует его в JavaScript-объекты, XML, строки или
-структурированные JSON-объекты на основе заголовков `Content-Type` или
-параметра `responseType`.
+> [English](https://github.com/IT-IF-OR/hyperttp-parser) | [Русский](https://github.com/IT-IF-OR/hyperttp-parser/tree/main/lang/ru)
 
-## Особенности
+Automated response parsing and content conversion plugin for Hyperttp.
 
-- 🤖 **Автоматическое определение (`auto`)**:
-Самостоятельно распознает форматы `JSON`, `XML` и `Text`,
-избавляя от необходимости вызывать `.json()` вручную.
-- 🦅 **Парсинг HTML**:
-При получении HTML-страниц автоматически парсит тело ответа через
-`node-html-parser`, извлекая заголовок, мета-теги и структурированное содержимое.
-- ⏱️ **Метрики производительности**: Точно замеряет время,
-затраченное на десериализацию данных, и
-сохраняет результат в `req.meta.timings.parsingMs` (при включенном `trackTimings`).
-- 🧹 **Безопасная очистка (Stream Cleanup)**:
-В случае ответов с ошибками (HTTP Status >= 400) или
-сбоев вычитки плагин корректно закрывает/вызывает `cancel()` / `destroy()` у
-нативных стримов, предотвращая утечки памяти.
+## Features
 
-## Установка
+- Detects JSON, HTML, XML, text, and binary responses automatically.
+- Supports explicit `auto`, `json`, `text`, `html`, `xml`, `buffer`, and `stream` response types.
+- Explicit response types take precedence over `Content-Type`.
+- Supports protocol-neutral callbacks for data extraction and response-type detection.
+- Passes through values that have already been converted.
+- Returns a new `UniversalResponse` when `data` changes instead of mutating the input.
+
+## Installation
 
 ```bash
-# С использованием bun
-bun add @hyperttp/parser
-
-# С использованием npm/pnpm
 npm install @hyperttp/parser
-
+# or
+bun add @hyperttp/parser
 ```
 
-## Использование
+## Usage
 
-Плагин автоматически активируется на фазе `FORMAT` для всех типов запросов,
-кроме `HEAD`, `buffer` и `stream`.
+The `hyperttp` package registers the parser automatically:
 
-### Базовый пример
-
-```typescript
-import { HyperClient } from "@hyperttp/core";
-import "@hyperttp/parser"; // Подключение расширения типов HttpClientOptions
+```ts
+import { HyperClient } from "hyperttp";
 
 const client = new HyperClient({
   responseConverter: {
-    // Опции конфигурации парсера (передаются в экземпляр ResponseConverter)
-    charset: "utf-8"
-  }
+    parseHTML: true,
+    htmlMode: "full",
+  },
 });
 
-// 1. Автоматический парсинг JSON
-const jsonResult = await client.get<{ id: number }>("https://api.example.com/user/1");
-console.log(jsonResult.id);
+const user = await client.get<{ id: number }>(
+  "https://api.example.com/users/1",
+  "json",
+);
+```
 
-// 2. Автоматический парсинг HTML в Cheerio
-const $ = await client.get<any>("https://example.com/page", {
-  meta: { responseType: "html" } 
+Disable the built-in parser with `responseConverter: false`:
+
+```ts
+const client = new HyperClient({
+  responseConverter: false,
 });
-const pageTitle = $("head title").text();
-
 ```
 
-### Мониторинг времени парсинга
+When using `@hyperttp/core` directly, register the plugin explicitly:
 
-Если активирован трекинг таймингов, плагин обогатит объект `meta`:
+```ts
+import { HyperCore } from "@hyperttp/core";
+import { withParser } from "@hyperttp/parser";
 
-```typescript
-const req = {
-  url: "[https://api.example.com/heavy-data](https://api.example.com/heavy-data)",
-  method: "GET",
-  meta: { trackTimings: true }
-};
-
-const data = await client.execute(req);
-console.log(Время парсинга: ${req.meta.timings?.parsingMs} ms);
-
+const core = new HyperCore();
+core.use(withParser({ htmlMode: "full" }));
 ```
 
-## Как это работает (Архитектура)
+Importing `@hyperttp/parser` alone does not register the plugin.
 
-Плагин перехватывает управление в момент возврата ответа из сети на фазе **`FORMAT`**:
+## Response types
 
-```mermaid
-graph TD
-    Net[Ответ из сети NETWORK] --> Hook[Фаза FORMAT]
-    Hook --> CheckType{Тип ответа HEAD, buffer или stream?}
-    
-    CheckType -- Да --> Bypass[Пропустить без изменений] --> Return[Возврат пользователю]
-    CheckType -- Нет --> CheckStatus{Status >= 400?}
-    
-    CheckStatus -- Да --> Clean[Очистка/Закрытие Стрима] --> Return
-    CheckStatus -- Нет --> Read[Вычитка потока данных в буфер]
-    
-    Read --> Convert[Конвертация: JSON / XML / Cheerio / Text]
-    Convert --> Track{trackTimings === true?}
-    
-    Track -- Да --> Calc[Вычисление parsingMs] --> Return
-    Track -- Нет --> Return
+| Type | Result |
+| --- | --- |
+| `auto` | Detect from `Content-Type` or URL extension |
+| `json` | Parsed JavaScript value |
+| `text` | String |
+| `html` | Parsed HTML or the original string when `parseHTML: false` |
+| `xml` | Parsed by `fast-xml-parser` |
+| `buffer` | `Buffer` in Node.js or `Uint8Array` in Bun |
+| `stream` | Passed through without conversion |
 
-```
+## Configuration
 
-## Лицензия
+`withParser(options?)` supports `charset`, `parseHTML`, `htmlMode`, `xmlParserOptions`,
+`shouldParse`, `getData`/`bodyExtractor`, `getResponseType`/`detectResponseType`, and
+`isEmptyResponse`. Callbacks can be synchronous or asynchronous and receive the response,
+request, and request context.
+
+For REST, `HEAD` responses are skipped by default, and statuses `204`, `205`, and `304`
+are returned with `data: null`. Other protocols can define their own behavior through callbacks.
+
+> `maxBodySize` and `parseErrors` are reserved options in v2.0.0 and are not currently
+> applied during conversion.
+
+## License
 
 MIT © dirold2

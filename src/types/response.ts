@@ -1,4 +1,21 @@
-import type { InternalRequest, ResponseType } from "@hyperttp/types";
+import type { RequestContext, SendRequest, UniversalResponse } from "@hyperttp/types";
+
+export type ResponseType = "auto" | "json" | "text" | "html" | "xml" | "buffer" | "stream";
+export interface ConversionMeta {
+  contentType?: string;
+  contentEncoding?: string;
+  url?: string;
+}
+
+export type ParserCallback<T> = (
+  response: UniversalResponse,
+  request?: SendRequest,
+  ctx?: RequestContext,
+) => T | Promise<T>;
+
+export type ParserDataExtractor = ParserCallback<unknown>;
+export type ParserResponseTypeDetector = ParserCallback<ResponseType>;
+export type ParserPredicate = ParserCallback<boolean>;
 
 export interface ResponseConverterOptions {
   charset?: BufferEncoding;
@@ -7,43 +24,21 @@ export interface ResponseConverterOptions {
   htmlMode?: "simple" | "full";
   xmlParserOptions?: Record<string, unknown>;
   parseErrors?: boolean;
+  shouldParse?: ParserPredicate;
+  getData?: ParserDataExtractor;
+  /** Alias for `getData`. */
+  bodyExtractor?: ParserDataExtractor;
+  getResponseType?: ParserResponseTypeDetector;
+  /** Alias for `getResponseType`. */
+  detectResponseType?: ParserResponseTypeDetector;
+  isEmptyResponse?: ParserPredicate;
 }
 
-/**
- * @ru Парсированный ответ сервера
- */
 export type ParsedResponse = string | Buffer | Record<string, any> | any[] | null | any;
 
-/**
- * @ru Интерфейс внутреннего запроса, содержащий конфигурацию для `hyperttp-parser`
- * @en Internal request interface containing configuration for `hyperttp-parser`
- */
-export interface ParsableRequest extends InternalRequest {
-  meta?: {
-    /**
-     * @ru Локальные настройки конвертера, переопределяющие глобальные для этого конкретного запроса
-     * @en Local converter options overriding global ones for this specific request
-     */
-    responseConverter?: ResponseConverterOptions;
-
-    /**
-     * @ru Явно указанный тип ответа, к которому нужно привести результат
-     * @en Explicitly specified response type to cast the result to
-     */
-    responseType?: ResponseType;
-
-    /**
-     * @ru Сигнатура для поддержки остальных мета-полей других плагинов ядра
-     * @en Index signature to support other meta fields from core plugins
-     */
-    [key: string]: any;
-  };
+export interface ParsableRequest extends SendRequest {
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
-export interface ParsableRequest extends InternalRequest {
-  meta?: {
-    responseConverter?: ResponseConverterOptions;
-    responseType?: ResponseType;
-    [key: string]: any;
-  };
-}
+export type ParserRequestContext = RequestContext;
+export type ParserResponseType = ResponseType;

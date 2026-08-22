@@ -1,4 +1,4 @@
-import type { ConversionMeta, ResponseType } from "@hyperttp/types";
+import type { ConversionMeta, ResponseType } from "../types/response.js";
 import type { ResponseConverterOptions } from "../types/response.js";
 
 type ParsedResponse = unknown;
@@ -115,24 +115,20 @@ export class ResponseConverter {
       }
 
       const type = targetType === "auto" ? this.detect(meta.contentType, meta.url) : targetType;
-      return this.convertBody(source.body, type, meta);
+      return this.convertBody(source.body, type);
     }
 
     const type = targetType === "auto" ? this.detect(meta.contentType, meta.url) : targetType;
-    return this.convertBody(source, type, meta);
+    return this.convertBody(source, type);
   }
 
-  private async convertBody(
-    body: unknown,
-    type: ResponseType,
-    meta: ConversionMeta,
-  ): Promise<ParsedResponse> {
+  private async convertBody(body: unknown, type: ResponseType): Promise<ParsedResponse> {
     if (body == null) return null;
 
     const native = await this.tryNative(body, type);
     if (native !== MISS) return native;
 
-    const fast = await this.fast(body, type, meta);
+    const fast = await this.fast(body, type);
     if (fast !== MISS) return fast;
 
     return this.slow(body, type);
@@ -170,11 +166,7 @@ export class ResponseConverter {
     return MISS;
   }
 
-  private async fast(
-    body: unknown,
-    type: ResponseType,
-    meta: ConversionMeta,
-  ): Promise<ParsedResponse | typeof MISS> {
+  private async fast(body: unknown, type: ResponseType): Promise<ParsedResponse | typeof MISS> {
     if (type === "buffer") {
       if (this.isBun) {
         return this.bodyToBytes(body);
@@ -191,9 +183,7 @@ export class ResponseConverter {
       return bytes !== MISS ? this.bytesToText(bytes) : MISS;
     }
 
-    const ct = normalizeCT(meta.contentType);
-    const isJson = type === "json" || ct === "application/json" || ct?.endsWith("+json");
-    if (isJson) {
+    if (type === "json") {
       return this.resolveJsonBody(body);
     }
 
@@ -215,7 +205,9 @@ export class ResponseConverter {
   }
 
   private async resolveJsonBody(body: unknown): Promise<ParsedResponse | typeof MISS> {
-    if (isPlainJsonValue(body)) return body;
+    if (isPlainJsonValue(body) || typeof body === "number" || typeof body === "boolean") {
+      return body;
+    }
     if (typeof body === "string") return this.tryParseJson(body);
 
     const bytes = await this.bodyToBytes(body);
