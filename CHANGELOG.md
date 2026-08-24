@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.0.1] - 2026-08-24
+
+### Fixed
+
+- Preserved native stream response bodies when `SendRequest.input.stream` is enabled, independent of optional `metadata.responseType`.
+
 ## [2.0.0] - 2026-08-22
 
 ### Added

@@ -26,7 +26,7 @@ function fastKey(opts?: Partial<ResponseConverterOptions>): string {
   ].join("|");
 }
 
-type HttpInput = { method?: string };
+type HttpInput = { method?: string; stream?: boolean };
 function httpInput(req?: SendRequest): HttpInput {
   return req?.input !== null && typeof req?.input === "object" ? (req.input as HttpInput) : {};
 }
@@ -94,6 +94,8 @@ export function withParser(pluginOptions: Partial<ResponseConverterOptions> = {}
       defaultConverter = new ResponseConverter(globalOptions);
     },
     async onResponse(res: UniversalResponse, req, _ctx, reqCtx): Promise<UniversalResponse | void> {
+      if (httpInput(req).stream) return;
+
       const meta = requestMetadata(req, reqCtx);
       const localOptions = meta.responseConverter as Partial<ResponseConverterOptions> | undefined;
       const effectiveOptions = localOptions ? { ...globalOptions, ...localOptions } : globalOptions;

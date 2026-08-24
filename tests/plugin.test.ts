@@ -78,6 +78,19 @@ describe("protocol-neutral parser callbacks", () => {
 });
 
 describe("REST defaults", () => {
+  it("preserves stream responses without relying on metadata", async () => {
+    const body = new ReadableStream();
+    const original = response({ data: body });
+    const shouldParse = vi.fn(() => true);
+    const getData = vi.fn();
+    const request: SendRequest = { protocol: "rest", input: { method: "GET", stream: true } };
+
+    expect(await setup({ shouldParse, getData }).onResponse?.(original, request)).toBeUndefined();
+    expect(original.data).toBe(body);
+    expect(shouldParse).not.toHaveBeenCalled();
+    expect(getData).not.toHaveBeenCalled();
+  });
+
   it("does not parse HEAD responses", async () => {
     const original = response({ data: '{"value":1}', headers: { "content-type": "application/json" } });
     const request: SendRequest = { protocol: "rest", input: { method: "HEAD" } };
