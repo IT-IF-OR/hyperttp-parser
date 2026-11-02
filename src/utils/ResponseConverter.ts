@@ -169,7 +169,7 @@ export class ResponseConverter {
 
   private async fast(body: unknown, type: ResponseType): Promise<ParsedResponse | typeof MISS> {
     if (type === "buffer") {
-      if (this.isBun) {
+      if (this.isBun || typeof Buffer === "undefined") {
         return this.bodyToBytes(body);
       } else {
         if (isBufferLike(body)) return body;
@@ -197,8 +197,11 @@ export class ResponseConverter {
   }
 
   private bytesToText(bytes: Uint8Array): string {
-    return this.isBun
-      ? this.decoder.decode(bytes)
+    return this.isBun || typeof Buffer === "undefined"
+      ? (this.charset === "utf-8" || this.charset === "utf8"
+          ? this.decoder
+          : new TextDecoder(this.charset)
+        ).decode(bytes)
       : Buffer.from(bytes).toString(this.charset as BufferEncoding);
   }
 
@@ -226,7 +229,13 @@ export class ResponseConverter {
 
     switch (type) {
       case "buffer":
-        return this.isBun
+        if (
+          typeof Buffer === "undefined" &&
+          !["utf8", "utf-8"].includes(this.charset.toLowerCase())
+        ) {
+          throw new TypeError("Non-UTF-8 string-to-buffer encoding requires Buffer support");
+        }
+        return this.isBun || typeof Buffer === "undefined"
           ? new TextEncoder().encode(text)
           : Buffer.from(text, this.charset as BufferEncoding);
 

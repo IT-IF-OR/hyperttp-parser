@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.0.2] - 2026-11-03
+
+### Fixed
+
+- Decode text/JSON and return binary bytes without requiring global Buffer in browsers. UTF-8 string-to-buffer conversion uses TextEncoder when Buffer is unavailable; other string encodings fail explicitly instead of silently producing incorrect bytes.
+- Honor configured TextDecoder-supported charsets on Buffer-free decoding paths.
+- Added Buffer-free regression tests and verified the built high-level client in Chromium without Node polyfills.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
