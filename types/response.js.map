@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["response.js"],
+  "sourcesContent": ["export {};\n//# sourceMappingURL=response.js.map"],
+  "mappings": "aAAA",
+  "names": []
+}

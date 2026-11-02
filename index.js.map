@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../src/index.ts"],
+  "sourcesContent": ["export { withParser } from \"./plugin.js\";\nexport * from \"./types/response.js\";\nexport * from \"./utils/ResponseConverter.js\";\n"],
+  "mappings": "aAAA,OAAS,eAAkB,cAC3B,WAAc,sBACd,WAAc",
+  "names": []
+}
