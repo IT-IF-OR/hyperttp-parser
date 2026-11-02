@@ -21,6 +21,23 @@ npm install @hyperttp/parser
 bun add @hyperttp/parser
 ```
 
+## Optional HTML and XML support
+
+JSON, text, binary, and stream responses work without additional dependencies.
+Install only the parser you need:
+
+```bash
+npm install node-html-parser # HTML
+npm install fast-xml-builder # XML building (separate package)
+npm install fast-xml-parser  # XML parsing
+```
+
+These packages are optional peer dependencies and are loaded only when parsing the
+corresponding format, including when detected through `auto`. If the required parser
+is missing, conversion rejects with an installation hint. Use `parseHTML: false` to
+return HTML as a string without `node-html-parser`, or request `text` for raw HTML/XML.
+`fast-xml-builder` is also available as a separate optional peer dependency for XML building.
+
 ## Usage
 
 The `hyperttp` package registers the parser automatically:
@@ -69,13 +86,27 @@ Importing `@hyperttp/parser` alone does not register the plugin.
 | `json` | Parsed JavaScript value |
 | `text` | String |
 | `html` | Parsed HTML or the original string when `parseHTML: false` |
-| `xml` | Parsed by `fast-xml-parser` |
+| `xml` | Objects/arrays → XML via `fast-xml-builder`; strings/binary data → parsed value via `fast-xml-parser` |
 | `buffer` | `Buffer` in Node.js or `Uint8Array` in Bun |
 | `stream` | Passed through without conversion |
 
+## XML conversion
+
+```ts
+import { ResponseConverter } from "@hyperttp/parser";
+
+const converter = new ResponseConverter({ xmlBuilderOptions: { format: true } });
+const xml = await converter.convert({ root: { value: "42" } }, "xml");
+const data = await converter.convert(xml, "xml"); // { root: { value: "42" } }
+```
+
+Plain objects and arrays build XML; strings and binary bodies are parsed as XML.
+The builder preserves `@_` attributes by default, matching the parser defaults.
+Only the dependency for the selected direction is loaded. `null`/`undefined` remain `null`.
+
 ## Configuration
 
-`withParser(options?)` supports `charset`, `parseHTML`, `htmlMode`, `xmlParserOptions`,
+`withParser(options?)` supports `charset`, `parseHTML`, `htmlMode`, `xmlParserOptions`, `xmlBuilderOptions`,
 `shouldParse`, `getData`/`bodyExtractor`, `getResponseType`/`detectResponseType`, and
 `isEmptyResponse`. Callbacks can be synchronous or asynchronous and receive the response,
 request, and request context.

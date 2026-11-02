@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [3.0.0] - 2026-11-02
+
+### Added
+
+- Added XML building through the standalone `fast-xml-builder` package: `convert(data, "xml")` now builds XML from plain objects and arrays, while strings and binary bodies continue to be parsed through `fast-xml-parser`.
+- Added `xmlBuilderOptions` for configuring XML output. By default, the builder preserves attributes using the `@_` prefix, matching the parser defaults.
+- Added actionable installation errors when an optional HTML/XML dependency cannot be loaded.
+- Added tests for optional dependencies, XML round-trip conversion, builder options, and per-request XML settings.
+
+### Changed
+
+- **Breaking:** Moved `node-html-parser`, `fast-xml-parser`, and `fast-xml-builder` from required dependencies to optional peer dependencies. Install only the packages needed for HTML parsing, XML parsing, or XML building; each is loaded lazily.
+- Updated the `@hyperttp/types` peer dependency to `^0.4.2`.
+- Updated English and Russian documentation with optional dependency installation and XML conversion examples.
+
+### Fixed
+
+- Prevented per-request `xmlParserOptions` and `xmlBuilderOptions` from reusing converters cached with different XML settings.
+
+### Migration
+
+- Install `node-html-parser` explicitly for HTML parsing, `fast-xml-parser` for XML parsing, and `fast-xml-builder` for XML building.
+- Use `parseHTML: false` to receive HTML as a string without an HTML parser, or request `text` for raw HTML/XML.
+- Passing a plain object or array to `convert(data, "xml")` now produces an XML string rather than attempting to parse the input.
+
 ## [2.0.1] - 2026-08-24
 
 ### Fixed

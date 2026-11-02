@@ -21,6 +21,24 @@ npm install @hyperttp/parser
 bun add @hyperttp/parser
 ```
 
+## Опциональная поддержка HTML и XML
+
+JSON, текстовые, бинарные и потоковые ответы работают без дополнительных зависимостей.
+Установите только нужный парсер:
+
+```bash
+npm install node-html-parser # HTML
+npm install fast-xml-builder # Построение XML (отдельный пакет)
+npm install fast-xml-parser  # Разбор XML
+```
+
+Это опциональные peer-зависимости: они загружаются только при разборе соответствующего
+формата, в том числе при определении через `auto`. Если нужный парсер не установлен,
+преобразование завершается ошибкой с подсказкой по установке. При `parseHTML: false`
+HTML возвращается строкой без `node-html-parser`; для получения исходного HTML/XML
+можно также явно запросить `text`. `fast-xml-builder` тоже объявлен отдельной
+опциональной peer-зависимостью для построения XML.
+
 ## Использование
 
 Пакет `hyperttp` регистрирует parser автоматически:
@@ -69,13 +87,27 @@ core.use(withParser({ htmlMode: "full" }));
 | `json` | JavaScript-значение после JSON-разбора |
 | `text` | Строка |
 | `html` | Объект HTML или исходная строка при `parseHTML: false` |
-| `xml` | Результат `fast-xml-parser` |
+| `xml` | Объекты/массивы → XML через `fast-xml-builder`; строки/бинарные данные → объект через `fast-xml-parser` |
 | `buffer` | `Buffer` в Node.js или `Uint8Array` в Bun |
 | `stream` | Передача без преобразования |
 
+## Преобразование XML
+
+```ts
+import { ResponseConverter } from "@hyperttp/parser";
+
+const converter = new ResponseConverter({ xmlBuilderOptions: { format: true } });
+const xml = await converter.convert({ root: { value: "42" } }, "xml");
+const data = await converter.convert(xml, "xml"); // { root: { value: "42" } }
+```
+
+Обычные объекты и массивы преобразуются в XML, строки и бинарные данные разбираются как XML.
+По умолчанию builder сохраняет атрибуты с префиксом `@_`, совместимым с настройками parser.
+Загружается только зависимость для выбранного направления. `null`/`undefined` остаются `null`.
+
 ## Настройка
 
-`withParser(options?)` поддерживает `charset`, `parseHTML`, `htmlMode`, `xmlParserOptions`,
+`withParser(options?)` поддерживает `charset`, `parseHTML`, `htmlMode`, `xmlParserOptions`, `xmlBuilderOptions`,
 `shouldParse`, `getData`/`bodyExtractor`, `getResponseType`/`detectResponseType` и
 `isEmptyResponse`. Callbacks могут быть синхронными или асинхронными и получают response,
 request и request context.

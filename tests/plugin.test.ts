@@ -181,6 +181,68 @@ describe("REST defaults", () => {
   });
 });
 
+describe("optional parsers when installed", () => {
+  it("builds XML from objects and parses the result back", async () => {
+    const converter = new ResponseConverter();
+    const data = { root: { "@_id": "1", value: "42" } };
+    const xml = await converter.convert(data, "xml");
+    expect(xml).toBe('<root id="1"><value>42</value></root>');
+    await expect(converter.convert(xml, "xml")).resolves.toEqual(data);
+    await expect(converter.convert(Buffer.from(xml as string), "xml")).resolves.toEqual(data);
+  });
+
+  it("supports arrays and XML builder options", async () => {
+    const converter = new ResponseConverter({ xmlBuilderOptions: { arrayNodeName: "item" } });
+    await expect(converter.convert(["a", "b"], "xml")).resolves.toBe(
+      "<item>a</item><item>b</item>",
+    );
+  });
+
+  it("applies per-request builder options without cache collisions", async () => {
+    const plugin = setup();
+    const original = response({ data: { root: "" } });
+    for (const suppressEmptyNode of [true, false]) {
+      const parsed = await plugin.onResponse?.(original, {
+        ...restRequest,
+        metadata: {
+          responseType: "xml",
+          responseConverter: { xmlBuilderOptions: { suppressEmptyNode } },
+        },
+      });
+      expect(parsed?.data).toBe(suppressEmptyNode ? "<root/>" : "<root></root>");
+    }
+  });
+  it("applies per-request parser options without cache collisions", async () => {
+    const plugin = setup();
+    const original = response({ data: "<root>42</root>" });
+    for (const parseTagValue of [false, true]) {
+      const parsed = await plugin.onResponse?.(original, {
+        ...restRequest,
+        metadata: {
+          responseType: "xml",
+          responseConverter: { xmlParserOptions: { parseTagValue } },
+        },
+      });
+      expect(parsed?.data).toEqual({ root: parseTagValue ? 42 : "42" });
+    }
+    expect(original.data).toBe("<root>42</root>");
+  });
+
+  it("parses XML with configured options", async () => {
+    const converter = new ResponseConverter({ xmlParserOptions: { parseTagValue: true } });
+    await expect(converter.convert('<root id="1"><value>42</value></root>', "xml")).resolves.toEqual({
+      root: { "@_id": "1", value: 42 },
+    });
+  });
+
+  it("parses HTML in simple mode", async () => {
+    const converter = new ResponseConverter({ htmlMode: "simple" });
+    await expect(
+      converter.convert("<html><head><title>Title</title></head><body>Hello</body></html>", "html"),
+    ).resolves.toEqual({ title: "Title", text: "Hello" });
+  });
+});
+
 describe("ResponseConverter fast paths", () => {
   it("lets an explicit response type override a conflicting content type", async () => {
     const converter = new ResponseConverter();

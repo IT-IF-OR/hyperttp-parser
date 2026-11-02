@@ -23,6 +23,7 @@ export interface ResponseConverterOptions {
   parseHTML?: boolean;
   htmlMode?: "simple" | "full";
   xmlParserOptions?: Record<string, unknown>;
+  xmlBuilderOptions?: Record<string, unknown>;
   parseErrors?: boolean;
   shouldParse?: ParserPredicate;
   getData?: ParserDataExtractor;

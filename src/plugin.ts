@@ -122,7 +122,9 @@ export function withParser(pluginOptions: Partial<ResponseConverterOptions> = {}
       }
 
       let converter = defaultConverter;
-      if (localOptions) {
+      if (localOptions?.xmlBuilderOptions || localOptions?.xmlParserOptions) {
+        converter = new ResponseConverter(effectiveOptions);
+      } else if (localOptions) {
         const cacheKey = fastKey(localOptions);
         let cached = converterCache.get(cacheKey);
         if (!cached) {

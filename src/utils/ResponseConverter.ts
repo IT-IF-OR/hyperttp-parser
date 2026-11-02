@@ -87,6 +87,7 @@ export class ResponseConverter {
   private readonly decoder: TextDecoder;
   private readonly isBun = typeof (globalThis as any).Bun !== "undefined";
 
+  private _xmlBuilderPromise: Promise<{ build(data: any): string }> | null = null;
   private _xmlParser: { parse(text: string): unknown } | null = null;
   private _xmlPromise: Promise<{ parse(text: string): unknown }> | null = null;
   private _htmlParser: ((html: string) => any) | null = null;
@@ -181,6 +182,11 @@ export class ResponseConverter {
       if (typeof body === "string") return body;
       const bytes = await this.bodyToBytes(body);
       return bytes !== MISS ? this.bytesToText(bytes) : MISS;
+    }
+
+    if (type === "xml" && isPlainJsonValue(body)) {
+      const builder = await this.getXmlBuilder();
+      return builder.build(body);
     }
 
     if (type === "json") {
@@ -511,20 +517,48 @@ export class ResponseConverter {
     return result as ParsedResponse;
   }
 
+  private getXmlBuilder(): Promise<{ build(data: any): string }> {
+    if (!this._xmlBuilderPromise) {
+      this._xmlBuilderPromise = import("fast-xml-builder")
+        .catch((cause: unknown) => {
+          throw new Error(
+            '@hyperttp/parser: XML building requires "fast-xml-builder". Install it with: npm install fast-xml-builder',
+            { cause },
+          );
+        })
+        .then(
+          ({ default: XMLBuilder }) =>
+            new XMLBuilder({
+              ignoreAttributes: false,
+              attributeNamePrefix: "@_",
+              ...this.options.xmlBuilderOptions,
+            }),
+        );
+    }
+    return this._xmlBuilderPromise;
+  }
+
   private async getXmlParser(): Promise<{ parse(text: string): unknown }> {
     if (this._xmlParser) return Promise.resolve(this._xmlParser);
     if (!this._xmlPromise) {
-      this._xmlPromise = import("fast-xml-parser").then(({ XMLParser }) => {
-        this._xmlParser = new XMLParser({
-          ignoreAttributes: false,
-          attributeNamePrefix: "@_",
-          parseTagValue: false,
-          parseAttributeValue: false,
-          trimValues: true,
-          ...this.options.xmlParserOptions,
+      this._xmlPromise = import("fast-xml-parser")
+        .catch((cause: unknown) => {
+          throw new Error(
+            '@hyperttp/parser: XML parsing requires "fast-xml-parser". Install it with: npm install fast-xml-parser',
+            { cause },
+          );
+        })
+        .then(({ XMLParser }) => {
+          this._xmlParser = new XMLParser({
+            ignoreAttributes: false,
+            attributeNamePrefix: "@_",
+            parseTagValue: false,
+            parseAttributeValue: false,
+            trimValues: true,
+            ...this.options.xmlParserOptions,
+          });
+          return this._xmlParser;
         });
-        return this._xmlParser;
-      });
     }
     return this._xmlPromise;
   }
@@ -532,10 +566,17 @@ export class ResponseConverter {
   private async getHtmlParser(): Promise<(html: string) => any> {
     if (this._htmlParser) return Promise.resolve(this._htmlParser);
     if (!this._htmlParserPromise) {
-      this._htmlParserPromise = import("node-html-parser").then((mod) => {
-        this._htmlParser = ((mod as any).parse ?? mod) as (html: string) => any;
-        return this._htmlParser!;
-      });
+      this._htmlParserPromise = import("node-html-parser")
+        .catch((cause: unknown) => {
+          throw new Error(
+            '@hyperttp/parser: HTML parsing requires "node-html-parser". Install it with: npm install node-html-parser',
+            { cause },
+          );
+        })
+        .then((mod) => {
+          this._htmlParser = ((mod as any).parse ?? mod) as (html: string) => any;
+          return this._htmlParser!;
+        });
     }
     return this._htmlParserPromise;
   }
