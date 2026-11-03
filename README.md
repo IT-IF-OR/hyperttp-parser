@@ -52,10 +52,7 @@ const client = new HyperClient({
   },
 });
 
-const user = await client.get<{ id: number }>(
-  "https://api.example.com/users/1",
-  "json",
-);
+const user = await client.get<{ id: number }>("https://api.example.com/users/1", "json");
 ```
 
 Disable the built-in parser with `responseConverter: false`:
@@ -80,15 +77,15 @@ Importing `@hyperttp/parser` alone does not register the plugin.
 
 ## Response types
 
-| Type | Result |
-| --- | --- |
-| `auto` | Detect from `Content-Type` or URL extension |
-| `json` | Parsed JavaScript value |
-| `text` | String |
-| `html` | Parsed HTML or the original string when `parseHTML: false` |
-| `xml` | Objects/arrays → XML via `fast-xml-builder`; strings/binary data → parsed value via `fast-xml-parser` |
-| `buffer` | `Buffer` in Node.js or `Uint8Array` in Bun |
-| `stream` | Passed through without conversion |
+| Type     | Result                                                                                                |
+| -------- | ----------------------------------------------------------------------------------------------------- |
+| `auto`   | Detect from `Content-Type` or URL extension                                                           |
+| `json`   | Parsed JavaScript value                                                                               |
+| `text`   | String                                                                                                |
+| `html`   | Parsed HTML or the original string when `parseHTML: false`                                            |
+| `xml`    | Objects/arrays → XML via `fast-xml-builder`; strings/binary data → parsed value via `fast-xml-parser` |
+| `buffer` | `Buffer` in Node.js or `Uint8Array` in Bun                                                            |
+| `stream` | Passed through without conversion                                                                     |
 
 ## XML conversion
 
