@@ -1,5 +1,7 @@
 # Changelog
 
+The format is based on [Keep a Changelog](https://keepachangelog.com/).
+
 ## [3.0.2] - 2026-11-03
 
 ### Fixed
@@ -9,8 +11,6 @@
 - Added Buffer-free regression tests and verified the built high-level client in Chromium without Node polyfills.
 
 All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [3.0.0] - 2026-11-02
 

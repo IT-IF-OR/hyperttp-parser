@@ -13,9 +13,7 @@ function setup(options: Parameters<typeof withParser>[0] = {}) {
   return plugin;
 }
 
-function response(
-  overrides: Partial<UniversalResponse> = {},
-): UniversalResponse {
+function response(overrides: Partial<UniversalResponse> = {}): UniversalResponse {
   return {
     protocol: "rest",
     ok: true,
@@ -92,7 +90,10 @@ describe("REST defaults", () => {
   });
 
   it("does not parse HEAD responses", async () => {
-    const original = response({ data: '{"value":1}', headers: { "content-type": "application/json" } });
+    const original = response({
+      data: '{"value":1}',
+      headers: { "content-type": "application/json" },
+    });
     const request: SendRequest = { protocol: "rest", input: { method: "HEAD" } };
 
     expect(await setup().onResponse?.(original, request)).toBeUndefined();
@@ -230,7 +231,9 @@ describe("optional parsers when installed", () => {
 
   it("parses XML with configured options", async () => {
     const converter = new ResponseConverter({ xmlParserOptions: { parseTagValue: true } });
-    await expect(converter.convert('<root id="1"><value>42</value></root>', "xml")).resolves.toEqual({
+    await expect(
+      converter.convert('<root id="1"><value>42</value></root>', "xml"),
+    ).resolves.toEqual({
       root: { "@_id": "1", value: 42 },
     });
   });

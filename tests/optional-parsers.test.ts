@@ -20,7 +20,6 @@ describe("without optional parsers", () => {
     const result = await converter.convert(bytes, "buffer");
     expect(result).toBeInstanceOf(Uint8Array);
     expect(Array.from(result as Uint8Array)).toEqual([1, 2, 3]);
-
   });
 
   it("explains how to install the missing XML builder", async () => {
@@ -38,11 +37,14 @@ describe("without optional parsers", () => {
   it.each([
     ["xml", "application/xml", "<root/>", "fast-xml-parser"],
     ["html", "text/html", "<p>Hello</p>", "node-html-parser"],
-  ] as const)("explains how to install the missing %s parser", async (type, contentType, body, name) => {
-    const converter = new ResponseConverter();
-    await expect(converter.convert(body, type)).rejects.toThrow(`npm install ${name}`);
-    await expect(converter.convert(body, "auto", { contentType })).rejects.toThrow(
-      `npm install ${name}`,
-    );
-  });
+  ] as const)(
+    "explains how to install the missing %s parser",
+    async (type, contentType, body, name) => {
+      const converter = new ResponseConverter();
+      await expect(converter.convert(body, type)).rejects.toThrow(`npm install ${name}`);
+      await expect(converter.convert(body, "auto", { contentType })).rejects.toThrow(
+        `npm install ${name}`,
+      );
+    },
+  );
 });

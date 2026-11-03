@@ -53,10 +53,7 @@ const client = new HyperClient({
   },
 });
 
-const user = await client.get<{ id: number }>(
-  "https://api.example.com/users/1",
-  "json",
-);
+const user = await client.get<{ id: number }>("https://api.example.com/users/1", "json");
 ```
 
 Отключить встроенный parser можно через `responseConverter: false`:
@@ -81,15 +78,15 @@ core.use(withParser({ htmlMode: "full" }));
 
 ## Типы ответа
 
-| Тип | Результат |
-| --- | --- |
-| `auto` | Определение по `Content-Type` или расширению URL |
-| `json` | JavaScript-значение после JSON-разбора |
-| `text` | Строка |
-| `html` | Объект HTML или исходная строка при `parseHTML: false` |
-| `xml` | Объекты/массивы → XML через `fast-xml-builder`; строки/бинарные данные → объект через `fast-xml-parser` |
-| `buffer` | `Buffer` в Node.js или `Uint8Array` в Bun |
-| `stream` | Передача без преобразования |
+| Тип      | Результат                                                                                               |
+| -------- | ------------------------------------------------------------------------------------------------------- |
+| `auto`   | Определение по `Content-Type` или расширению URL                                                        |
+| `json`   | JavaScript-значение после JSON-разбора                                                                  |
+| `text`   | Строка                                                                                                  |
+| `html`   | Объект HTML или исходная строка при `parseHTML: false`                                                  |
+| `xml`    | Объекты/массивы → XML через `fast-xml-builder`; строки/бинарные данные → объект через `fast-xml-parser` |
+| `buffer` | `Buffer` в Node.js или `Uint8Array` в Bun                                                               |
+| `stream` | Передача без преобразования                                                                             |
 
 ## Преобразование XML
 
